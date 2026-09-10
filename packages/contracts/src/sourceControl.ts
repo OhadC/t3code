@@ -8,6 +8,7 @@ export const SourceControlProviderKind = Schema.Literals([
   "forgejo",
   "azure-devops",
   "bitbucket",
+  "bitbucket-server",
   "unknown",
 ]);
 export type SourceControlProviderKind = typeof SourceControlProviderKind.Type;

@@ -1281,6 +1281,12 @@ const PROVIDER_REQUIREMENT: Partial<
     unauthenticated:
       "Bitbucket rejected the configured credentials. Check T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN.",
   },
+  "bitbucket-server": {
+    missing:
+      "Bitbucket Data Center needs a host and token on the server. Set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN.",
+    unauthenticated:
+      "Bitbucket Data Center rejected the configured token. Check T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN.",
+  },
 };
 
 /**

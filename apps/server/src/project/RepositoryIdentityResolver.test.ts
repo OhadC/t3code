@@ -305,6 +305,33 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
+  it.effect("drops the scm prefix from Bitbucket Data Center HTTPS remotes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-bitbucket-server-test-",
+      });
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, [
+        "remote",
+        "add",
+        "origin",
+        "https://bitbucket.example.com/scm/~ohcohen/testing-repo--ohad.git",
+      ]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+
+      expect(identity).not.toBeNull();
+      expect(identity?.canonicalKey).toBe("bitbucket.example.com/~ohcohen/testing-repo--ohad");
+      expect(identity?.displayName).toBe("~ohcohen/testing-repo--ohad");
+      expect(identity?.provider).toBe("bitbucket-server");
+      expect(identity?.owner).toBe("~ohcohen");
+      expect(identity?.name).toBe("testing-repo--ohad");
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
   it.effect(
     "keeps null identities cached across repeated resolves until the negative TTL expires",
     () =>

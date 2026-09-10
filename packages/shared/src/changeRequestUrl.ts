@@ -64,9 +64,13 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
   if (gitlab) return claim(host, gitlab);
   // Bitbucket Cloud: /{workspace}/{repo}/pull-requests/{n}
-  if (isHostOf(host, "bitbucket.org", "bitbucket")) {
+  if (isHostOf(host, "bitbucket.org")) {
     const match = /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
     return claim(host, match);
+  }
+  if (isHostOf(host, "bitbucket.org", "bitbucket")) {
+    const match = BITBUCKET_SERVER_PULL_REQUEST_PATH.exec(url.pathname);
+    return claim(host, match && [match[0], `${match[1]}/${match[2]}`, match[3]]);
   }
   // Azure DevOps, both the current host and the per-organisation one it replaced. `_git` is part
   // of the repository path there, as it is in the remote URL the identity is read from.
@@ -77,7 +81,13 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
   return null;
 }
 
-function claim(host: string, match: RegExpExecArray | null): ChangeRequestLink | null {
+const BITBUCKET_SERVER_PULL_REQUEST_PATH =
+  /^\/projects\/([^/]+)\/repos\/([^/]+)\/pull-requests\/(\d+)(?:\/|$)/u;
+
+function claim(
+  host: string,
+  match: RegExpExecArray | ReadonlyArray<string | undefined> | null,
+): ChangeRequestLink | null {
   const repository = match?.[1];
   const number = Number(match?.[2]);
   return repository && Number.isSafeInteger(number) && number > 0
@@ -115,6 +125,11 @@ export function changeRequestUrlFor(
       return `https://${host}/${repository}/-/merge_requests/${number}`;
     case "bitbucket":
       return `https://${host}/${repository}/pull-requests/${number}`;
+    case "bitbucket-server": {
+      const [projectKey, slug, ...rest] = repository.split("/");
+      if (!projectKey || !slug || rest.length > 0) return null;
+      return `https://${host}/projects/${projectKey}/repos/${slug}/pull-requests/${number}`;
+    }
     case "azure-devops":
       return `https://${canonicalRepositoryKey(`${host}/${repository}`.toLowerCase())}/pullrequest/${number}`;
     default:
@@ -224,12 +239,17 @@ export function siblingPullRequestUrl(url: string, number: number): string | nul
   const reference = parseChangeRequestUrl(url);
   if (reference === null || !Number.isSafeInteger(number) || number < 1) return null;
   const sibling = new URL(url);
+  sibling.search = "";
+  sibling.hash = "";
+  const server = BITBUCKET_SERVER_PULL_REQUEST_PATH.exec(sibling.pathname);
+  if (server !== null) {
+    sibling.pathname = `/projects/${server[1]}/repos/${server[2]}/pull-requests/${number}`;
+    return sibling.toString();
+  }
   const route = /^\/(-\/merge_requests|pulls?|pull-requests|pullrequest)\/\d+(?:\/|$)/u.exec(
     sibling.pathname.slice(reference.repository.length + 1),
   )?.[1];
   if (route === undefined) return null;
   sibling.pathname = `/${reference.repository}/${route}/${number}`;
-  sibling.search = "";
-  sibling.hash = "";
   return sibling.toString();
 }

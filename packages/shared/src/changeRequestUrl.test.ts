@@ -55,6 +55,31 @@ describe("parseChangeRequestUrl", () => {
     );
   });
 
+  it("reads a Bitbucket Data Center pull request as PROJECTKEY/slug", () => {
+    expect(
+      parseChangeRequestUrl(
+        "https://bitbucket.example.com/projects/PROJ/repos/Web-App/pull-requests/42/overview",
+      ),
+    ).toEqual({ host: "bitbucket.example.com", repository: "proj/web-app", number: 42 });
+    expect(
+      parseChangeRequestUrl(
+        "https://bitbucket.cognyte.local:8443/projects/~OHCOHEN/repos/testing-repo--ohad/pull-requests/1",
+      ),
+    ).toEqual({
+      host: "bitbucket.cognyte.local",
+      repository: "~ohcohen/testing-repo--ohad",
+      number: 1,
+    });
+    // A Cloud-shaped path on a Data Center host is not a pull request there.
+    expect(
+      parseChangeRequestUrl("https://bitbucket.example.com/proj/repo/pull-requests/42"),
+    ).toBeNull();
+    // A Data Center-shaped path on bitbucket.org is not a pull request there either.
+    expect(
+      parseChangeRequestUrl("https://bitbucket.org/projects/PROJ/repos/repo/pull-requests/42"),
+    ).toBeNull();
+  });
+
   it("reads Bitbucket and both Azure DevOps URL forms", () => {
     expect(parseChangeRequestUrl("https://bitbucket.org/workspace/repo/pull-requests/5")).toEqual({
       host: "bitbucket.org",
@@ -137,6 +162,10 @@ describe("siblingPullRequestUrl", () => {
       "https://bitbucket.org/acme/web/pull-requests/43",
     ],
     [
+      "https://bitbucket.example.com/projects/ACME/repos/web/pull-requests/42/diff",
+      "https://bitbucket.example.com/projects/ACME/repos/web/pull-requests/43",
+    ],
+    [
       "https://dev.azure.com/acme/project/_git/web/pullrequest/42?view=files",
       "https://dev.azure.com/acme/project/_git/web/pullrequest/43",
     ],
@@ -186,5 +215,16 @@ describe("changeRequestUrlFor", () => {
       repository: "org/project/_git/web",
       number: 42,
     });
+  });
+
+  it("builds a Data Center URL that reads back as the same PROJECTKEY/slug", () => {
+    const url = changeRequestUrlFor("bitbucket-server", "bitbucket.example.com", "proj/web", 42);
+    expect(url).toBe("https://bitbucket.example.com/projects/proj/repos/web/pull-requests/42");
+    expect(parseChangeRequestUrl(url!)).toEqual({
+      host: "bitbucket.example.com",
+      repository: "proj/web",
+      number: 42,
+    });
+    expect(changeRequestUrlFor("bitbucket-server", "bitbucket.example.com", "web", 42)).toBeNull();
   });
 });

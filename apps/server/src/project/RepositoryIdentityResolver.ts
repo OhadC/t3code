@@ -71,8 +71,11 @@ function buildRepositoryIdentity(input: {
   readonly remoteUrl: string;
   readonly rootPath: string;
 }): RepositoryIdentity {
-  const canonicalKey = normalizeGitRemoteUrl(input.remoteUrl);
   const sourceControlProvider = detectSourceControlProviderFromGitRemoteUrl(input.remoteUrl);
+  const canonicalKey =
+    sourceControlProvider?.kind === "bitbucket-server"
+      ? normalizeGitRemoteUrl(input.remoteUrl).replace(/^([^/]+)\/scm\//u, "$1/")
+      : normalizeGitRemoteUrl(input.remoteUrl);
   const repositoryPath = canonicalKey.split("/").slice(1).join("/");
   const repositoryPathSegments = repositoryPath.split("/").filter((segment) => segment.length > 0);
   const [owner] = repositoryPathSegments;

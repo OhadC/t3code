@@ -485,11 +485,26 @@ it.effect("reports implemented tools separately from locally available executabl
           auth: "unknown",
           account: Option.none(),
         },
+        {
+          kind: "bitbucket-server",
+          status: "available",
+          auth: "unauthenticated",
+          account: Option.none(),
+        },
       ],
     );
     const bitbucket = result.sourceControlProviders.find((item) => item.kind === "bitbucket");
     assert.ok(bitbucket);
     assert.strictEqual(bitbucket.executable, undefined);
+    const bitbucketServer = result.sourceControlProviders.find(
+      (item) => item.kind === "bitbucket-server",
+    );
+    assert.ok(bitbucketServer);
+    assert.strictEqual(bitbucketServer.label, "Bitbucket Data Center");
+    assert.match(
+      Option.getOrElse(bitbucketServer.auth.detail, () => ""),
+      /T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN/u,
+    );
   }).pipe(Effect.provide(testLayer));
 });
 
@@ -622,6 +637,14 @@ Logged in to gitlab.com as gitlab-user
           auth: "authenticated",
           account: Option.some("forgejo-user"),
           detail: Option.none(),
+        },
+        {
+          kind: "bitbucket-server",
+          auth: "unauthenticated",
+          account: Option.none(),
+          detail: Option.some(
+            "Set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server (use an HTTP access token with repository read/write and project read scopes).",
+          ),
         },
       ],
     );

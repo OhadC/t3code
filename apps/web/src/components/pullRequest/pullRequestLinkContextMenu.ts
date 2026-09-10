@@ -13,6 +13,7 @@ const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
   gitlab: "Open on GitLab",
   forgejo: "Open on Forgejo",
   bitbucket: "Open on Bitbucket",
+  "bitbucket-server": "Open on Bitbucket Data Center",
   "azure-devops": "Open on Azure DevOps",
 };
 

@@ -79,6 +79,16 @@ const BITBUCKET_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   urlExample: "https://bitbucket.org/workspace/repo/pull-requests/42",
 };
 
+const BITBUCKET_SERVER_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "bitbucket",
+  providerName: "Bitbucket Data Center",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "Bitbucket Data Center pull request",
+  urlExample: "https://bitbucket.example.com/projects/KEY/repos/slug/pull-requests/42",
+};
+
 const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "change-request",
   providerName: "source control",
@@ -104,6 +114,8 @@ export function resolveChangeRequestPresentation(
       return AZURE_DEVOPS_CHANGE_REQUEST_PRESENTATION;
     case "bitbucket":
       return BITBUCKET_CHANGE_REQUEST_PRESENTATION;
+    case "bitbucket-server":
+      return BITBUCKET_SERVER_CHANGE_REQUEST_PRESENTATION;
     case "unknown":
       return GENERIC_CHANGE_REQUEST_PRESENTATION;
   }
@@ -200,8 +212,12 @@ function isAzureDevOpsHost(host: string): boolean {
   );
 }
 
-function isBitbucketHost(host: string): boolean {
-  return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
+function isBitbucketCloudHost(host: string): boolean {
+  return host === "bitbucket.org";
+}
+
+function isBitbucketServerHost(host: string): boolean {
+  return hasDnsLabel(host, "bitbucket");
 }
 
 export function detectSourceControlProviderFromRemoteUrl(
@@ -251,10 +267,18 @@ export function detectSourceControlProviderFromRemoteUrl(
     };
   }
 
-  if (isBitbucketHost(hostname)) {
+  if (isBitbucketCloudHost(hostname)) {
     return {
       kind: "bitbucket",
-      name: hostname === "bitbucket.org" ? "Bitbucket" : "Bitbucket Self-Hosted",
+      name: "Bitbucket",
+      baseUrl: toBaseUrl(host),
+    };
+  }
+
+  if (isBitbucketServerHost(hostname)) {
+    return {
+      kind: "bitbucket-server",
+      name: "Bitbucket Data Center",
       baseUrl: toBaseUrl(host),
     };
   }

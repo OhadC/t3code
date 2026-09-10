@@ -3,7 +3,13 @@ import { withUniwind } from "uniwind";
 
 const ThemedSvg = withUniwind(Svg);
 
-export type SourceControlIconKind = "github" | "gitlab" | "forgejo" | "bitbucket" | "azure-devops";
+export type SourceControlIconKind =
+  | "github"
+  | "gitlab"
+  | "forgejo"
+  | "bitbucket"
+  | "bitbucket-server"
+  | "azure-devops";
 
 export function SourceControlIcon(props: {
   readonly kind: SourceControlIconKind;
@@ -94,6 +100,7 @@ export function SourceControlIcon(props: {
         </Svg>
       );
     case "bitbucket":
+    case "bitbucket-server":
       return (
         <Svg width={size} height={size} viewBox="8.4 14.39 2481.29 2231.21">
           <Defs>

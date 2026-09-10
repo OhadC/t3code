@@ -12,6 +12,7 @@ import type { SourceControlProviderKind } from "@t3tools/contracts";
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as AzureDevOpsSourceControlProvider from "./AzureDevOpsSourceControlProvider.ts";
+import * as BitbucketServerSourceControlProvider from "./BitbucketServerSourceControlProvider.ts";
 import * as BitbucketSourceControlProvider from "./BitbucketSourceControlProvider.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
@@ -333,6 +334,11 @@ export const make = Effect.gen(function* () {
       discovery: bitbucketDiscovery,
     },
     { kind: "forgejo", provider: forgejo, discovery: forgejoDiscovery },
+    {
+      kind: "bitbucket-server",
+      provider: unsupportedProvider("bitbucket-server"),
+      discovery: BitbucketServerSourceControlProvider.discovery,
+    },
   ]);
 });
 

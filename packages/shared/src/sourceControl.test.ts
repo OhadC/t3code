@@ -29,6 +29,10 @@ describe("source control presentation", () => {
       shortLabel: "PR",
       singular: "pull request",
     });
+    expect(getChangeRequestTerminologyForKind("bitbucket-server")).toEqual({
+      shortLabel: "PR",
+      singular: "pull request",
+    });
   });
 
   it("falls back to generic change request copy for unknown providers", () => {
@@ -117,10 +121,35 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
     expect(
       detectSourceControlProviderFromRemoteUrl("https://gitlab.example.com/group/repo.git")?.kind,
     ).toBe("gitlab");
+  });
+
+  it("routes bitbucket.org to Cloud and any other bitbucket-labelled host to Data Center", () => {
     expect(
-      detectSourceControlProviderFromRemoteUrl("https://bitbucket.example.com/workspace/repo.git")
+      detectSourceControlProviderFromRemoteUrl("https://bitbucket.org/workspace/repo.git"),
+    ).toEqual({ kind: "bitbucket", name: "Bitbucket", baseUrl: "https://bitbucket.org" });
+    expect(
+      detectSourceControlProviderFromRemoteUrl("https://bitbucket.example.com/scm/proj/repo.git"),
+    ).toEqual({
+      kind: "bitbucket-server",
+      name: "Bitbucket Data Center",
+      baseUrl: "https://bitbucket.example.com",
+    });
+    expect(
+      detectSourceControlProviderFromRemoteUrl(
+        "ssh://git@bitbucket.example.com:7999/proj/repo.git",
+      ),
+    ).toEqual({
+      kind: "bitbucket-server",
+      name: "Bitbucket Data Center",
+      baseUrl: "https://bitbucket.example.com:7999",
+    });
+    expect(
+      detectSourceControlProviderFromRemoteUrl("git@bitbucket.cognyte.local:~ohcohen/repo.git")
         ?.kind,
-    ).toBe("bitbucket");
+    ).toBe("bitbucket-server");
+    expect(
+      detectSourceControlProviderFromRemoteUrl("https://git.acme.com/scm/proj/repo.git")?.kind,
+    ).toBe("unknown");
   });
 
   it("does not match provider names embedded in unrelated DNS labels", () => {

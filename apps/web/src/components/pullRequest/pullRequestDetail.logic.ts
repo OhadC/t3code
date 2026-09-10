@@ -135,6 +135,7 @@ export function pullRequestCheckoutCommand(
       }
       return `git clone --single-branch --branch ${headBranch} https://bitbucket.org/${headRepositoryNameWithOwner}.git t3code-pr-${number}`;
     }
+    case "bitbucket-server":
     case "unknown":
       return null;
   }
