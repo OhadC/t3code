@@ -51,32 +51,32 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
   // GitHub, and any Enterprise install: /{owner}/{repo}/pull/{n}
   if (isHostOf(host, "github.com", "github")) {
     const match = /^\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    if (match) return claim(host, match);
+    if (match) return claim(host, match[1], match[2]);
   }
   // Forgejo and Gitea use /pulls/ on arbitrary self-hosted domains.
   const forgejo = /^\/([^/]+(?:\/[^/]+)+)\/pulls\/(\d+)(?:\/|$)/u.exec(url.pathname);
   if (forgejo) {
-    const link = claim(host, forgejo);
+    const link = claim(host, forgejo[1], forgejo[2]);
     return link === null ? null : { ...link, authority: url.host.toLowerCase() };
   }
   // GitLab, self-hosted included: /{group}/[{subgroup}/...]{repo}/-/merge_requests/{n}. The `/-/`
   // separator is GitLab's own, so the hostname is not asked about.
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
-  if (gitlab) return claim(host, gitlab);
+  if (gitlab) return claim(host, gitlab[1], gitlab[2]);
   // Bitbucket Cloud: /{workspace}/{repo}/pull-requests/{n}
-  if (isHostOf(host, "bitbucket.org")) {
+  if (host === "bitbucket.org") {
     const match = /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
+    return claim(host, match?.[1], match?.[2]);
   }
   if (isHostOf(host, "bitbucket.org", "bitbucket")) {
     const match = BITBUCKET_SERVER_PULL_REQUEST_PATH.exec(url.pathname);
-    return claim(host, match && [match[0], `${match[1]}/${match[2]}`, match[3]]);
+    return claim(host, match && `${match[1]}/${match[2]}`, match?.[3]);
   }
   // Azure DevOps, both the current host and the per-organisation one it replaced. `_git` is part
   // of the repository path there, as it is in the remote URL the identity is read from.
   if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
     const match = /^\/((?:[^/]+\/)*_git\/[^/]+)\/pullrequest\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
+    return claim(host, match?.[1], match?.[2]);
   }
   return null;
 }
@@ -86,10 +86,10 @@ const BITBUCKET_SERVER_PULL_REQUEST_PATH =
 
 function claim(
   host: string,
-  match: RegExpExecArray | ReadonlyArray<string | undefined> | null,
+  repository: string | null | undefined,
+  numberText: string | undefined,
 ): ChangeRequestLink | null {
-  const repository = match?.[1];
-  const number = Number(match?.[2]);
+  const number = Number(numberText);
   return repository && Number.isSafeInteger(number) && number > 0
     ? { host, repository: repository.toLowerCase(), number }
     : null;

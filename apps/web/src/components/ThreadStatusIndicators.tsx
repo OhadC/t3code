@@ -116,7 +116,7 @@ export function linkedPullRequestSnapshotStatus(
     : link.url.includes("/pullrequest/")
       ? "azure-devops"
       : link.url.includes("/pull-requests/")
-        ? link.url.includes("/repos/")
+        ? link.url.includes("/projects/")
           ? "bitbucket-server"
           : "bitbucket"
         : link.url.includes("/pulls/")

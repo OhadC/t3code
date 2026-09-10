@@ -70,11 +70,9 @@ describe("parseChangeRequestUrl", () => {
       repository: "~ohcohen/testing-repo--ohad",
       number: 1,
     });
-    // A Cloud-shaped path on a Data Center host is not a pull request there.
     expect(
       parseChangeRequestUrl("https://bitbucket.example.com/proj/repo/pull-requests/42"),
     ).toBeNull();
-    // A Data Center-shaped path on bitbucket.org is not a pull request there either.
     expect(
       parseChangeRequestUrl("https://bitbucket.org/projects/PROJ/repos/repo/pull-requests/42"),
     ).toBeNull();
