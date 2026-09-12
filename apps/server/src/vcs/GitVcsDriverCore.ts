@@ -3416,6 +3416,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ]);
     });
 
+  const fetchRemoteRef: GitVcsDriver.GitVcsDriver["Service"]["fetchRemoteRef"] = Effect.fn(
+    "fetchRemoteRef",
+  )(function* (input) {
+    yield* runGit("GitVcsDriver.fetchRemoteRef.fetch", input.cwd, [
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      input.remoteName,
+      input.remoteRef,
+    ]);
+
+    const localBranchAlreadyExists = yield* branchExists(input.cwd, input.localBranch);
+    yield* runGit(
+      "GitVcsDriver.fetchRemoteRef.materialize",
+      input.cwd,
+      localBranchAlreadyExists
+        ? ["branch", "--force", input.localBranch, "FETCH_HEAD"]
+        : ["branch", input.localBranch, "FETCH_HEAD"],
+    );
+  });
+
   const setBranchUpstream: GitVcsDriver.GitVcsDriver["Service"]["setBranchUpstream"] = (input) =>
     runGit("GitVcsDriver.setBranchUpstream", input.cwd, [
       "branch",
@@ -3688,6 +3709,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     fetchRemoteBranch: (input) => withListRefsInvalidation(input.cwd, fetchRemoteBranch(input)),
     fetchRemoteTrackingBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input)),
+    fetchRemoteRef: (input) => withListRefsInvalidation(input.cwd, fetchRemoteRef(input)),
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
     pruneWorktrees: (input) => withListRefsInvalidation(input.cwd, pruneWorktrees(input)),

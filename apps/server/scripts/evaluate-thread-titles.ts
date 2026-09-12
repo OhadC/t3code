@@ -28,6 +28,7 @@ import * as GitLabCli from "../src/sourceControl/GitLabCli.ts";
 import * as ForgejoCli from "../src/sourceControl/ForgejoCli.ts";
 import * as AzureDevOpsCli from "../src/sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../src/sourceControl/BitbucketApi.ts";
+import * as BitbucketServerApi from "../src/sourceControl/BitbucketServerApi.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import * as VcsDriverRegistry from "../src/vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "../src/vcs/VcsProjectConfig.ts";
@@ -156,6 +157,7 @@ await Effect.runPromise(
               ForgejoCli.layer,
               AzureDevOpsCli.layer,
               BitbucketApi.layer,
+              BitbucketServerApi.layer,
             ),
           ),
           Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),

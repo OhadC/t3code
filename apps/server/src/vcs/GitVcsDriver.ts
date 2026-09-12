@@ -246,6 +246,14 @@ export interface GitFetchRemoteTrackingBranchInput {
   remoteBranch: string;
 }
 
+export interface GitFetchRemoteRefInput {
+  cwd: string;
+  remoteName: string;
+  /** A fully qualified ref on the remote, such as `refs/pull-requests/42/from`. */
+  remoteRef: string;
+  localBranch: string;
+}
+
 export interface GitFetchRemoteInput {
   cwd: string;
   remoteName: string;
@@ -364,6 +372,10 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<void, GitCommandError>;
     readonly fetchRemoteTrackingBranch: (
       input: GitFetchRemoteTrackingBranchInput,
+    ) => Effect.Effect<void, GitCommandError>;
+    /** Materializes any remote ref as a local branch, for refs no remote-tracking branch names. */
+    readonly fetchRemoteRef: (
+      input: GitFetchRemoteRefInput,
     ) => Effect.Effect<void, GitCommandError>;
     readonly setBranchUpstream: (
       input: GitSetBranchUpstreamInput,

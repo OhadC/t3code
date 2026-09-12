@@ -1,7 +1,12 @@
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
+import {
+  PositiveInt,
+  TrimmedNonEmptyString,
+  type ChangeRequest,
+  type SourceControlProviderKind,
+} from "@t3tools/contracts";
 
 export interface NormalizedBitbucketPullRequestRecord {
   readonly number: number;
@@ -15,6 +20,41 @@ export interface NormalizedBitbucketPullRequestRecord {
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
+}
+
+/** The number behind `#42`, `42`, or a pull request URL on either Bitbucket flavour. */
+export function normalizeBitbucketChangeRequestId(reference: string): string {
+  const trimmed = reference.trim().replace(/^#/, "");
+  const urlMatch = /(?:pull-requests|pullrequests|pull-request|pull|pr)\/(\d+)(?:\D.*)?$/i.exec(
+    trimmed,
+  );
+  return urlMatch?.[1] ?? trimmed;
+}
+
+export function toBitbucketChangeRequest(
+  provider: Extract<SourceControlProviderKind, "bitbucket" | "bitbucket-server">,
+  summary: NormalizedBitbucketPullRequestRecord,
+): ChangeRequest {
+  return {
+    provider,
+    number: summary.number,
+    title: summary.title,
+    url: summary.url,
+    baseRefName: summary.baseRefName,
+    headRefName: summary.headRefName,
+    state: summary.state,
+    ...(summary.isDraft === true ? { isDraft: true } : {}),
+    updatedAt: summary.updatedAt ?? Option.none(),
+    ...(summary.isCrossRepository !== undefined
+      ? { isCrossRepository: summary.isCrossRepository }
+      : {}),
+    ...(summary.headRepositoryNameWithOwner !== undefined
+      ? { headRepositoryNameWithOwner: summary.headRepositoryNameWithOwner }
+      : {}),
+    ...(summary.headRepositoryOwnerLogin !== undefined
+      ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
+      : {}),
+  };
 }
 
 export const BitbucketRepositoryRefSchema = Schema.Struct({

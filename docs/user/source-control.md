@@ -1,7 +1,7 @@
 # Source control
 
-T3 Code integrates with GitHub, GitLab, Forgejo, Gitea, Bitbucket, and Azure DevOps to clone and publish
-repositories, create pull requests, and review changes.
+T3 Code integrates with GitHub, GitLab, Forgejo, Gitea, Bitbucket (Cloud and Data Center), and Azure
+DevOps to clone and publish repositories, create pull requests, and review changes.
 
 ## Connect an account
 
@@ -63,6 +63,28 @@ export T3CODE_BITBUCKET_API_TOKEN="your-token"
 
 The access token takes precedence if both are configured. Restart the server after changing these
 variables.
+
+### Bitbucket Data Center
+
+Self-hosted Bitbucket (Data Center or Server) is configured separately from Bitbucket Cloud, and
+both can be set up at once. Create an HTTP access token with repository read and write and project
+read permissions, then set the host URL and token in the server's environment:
+
+```bash
+export T3CODE_BITBUCKET_SERVER_URL="https://bitbucket.example.com"
+export T3CODE_BITBUCKET_SERVER_TOKEN="your-http-access-token"
+```
+
+Include the context path if your host serves Bitbucket under one, such as
+`https://example.com/bitbucket`. Restart the server after changing these variables. Repositories are
+addressed as `PROJECTKEY/repo-slug`; personal repositories use `~username` as the project key.
+
+If the host uses a certificate from your organization's own certificate authority, the desktop app
+trusts the operating system certificate store automatically. For `npx t3`, start the server with
+`NODE_USE_SYSTEM_CA=1` so Node trusts it too.
+
+Publish Repository is not available for Bitbucket Data Center; create the repository on the host and
+clone it instead.
 
 ### Azure DevOps
 

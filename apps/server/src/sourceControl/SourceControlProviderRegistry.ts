@@ -312,6 +312,8 @@ export const make = Effect.gen(function* () {
   const bitbucket = yield* BitbucketSourceControlProvider.make;
   const bitbucketDiscovery = yield* BitbucketSourceControlProvider.makeDiscovery;
   const azureDevOps = yield* AzureDevOpsSourceControlProvider.make;
+  const bitbucketServer = yield* BitbucketServerSourceControlProvider.make;
+  const bitbucketServerDiscovery = yield* BitbucketServerSourceControlProvider.makeDiscovery;
   return yield* makeWithProviders([
     {
       kind: "github",
@@ -336,8 +338,8 @@ export const make = Effect.gen(function* () {
     { kind: "forgejo", provider: forgejo, discovery: forgejoDiscovery },
     {
       kind: "bitbucket-server",
-      provider: unsupportedProvider("bitbucket-server"),
-      discovery: BitbucketServerSourceControlProvider.discovery,
+      provider: bitbucketServer,
+      discovery: bitbucketServerDiscovery,
     },
   ]);
 });

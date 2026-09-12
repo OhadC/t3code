@@ -107,8 +107,12 @@ const nodeBinDirOf = (nodePath: string): string => {
   return lastSlash > 0 ? nodePath.slice(0, lastSlash) : "/usr/bin";
 };
 
-const backendChildEnvPatch = (): Record<string, string | undefined> =>
-  Object.fromEntries(DESKTOP_BACKEND_ENV_NAMES.map((name) => [name, undefined]));
+const backendChildEnvPatch = (): Record<string, string | undefined> => ({
+  ...Object.fromEntries(DESKTOP_BACKEND_ENV_NAMES.map((name) => [name, undefined])),
+  // Desktop users cannot set environment for the bundled server, so it trusts the OS
+  // certificate store itself; self-hosted providers behind a corporate CA depend on this.
+  NODE_USE_SYSTEM_CA: "1",
+});
 
 const getWslEnvEntryName = (entry: string): string => {
   const slashIndex = entry.indexOf("/");

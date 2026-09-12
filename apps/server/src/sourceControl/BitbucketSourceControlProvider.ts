@@ -1,34 +1,10 @@
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { SourceControlProviderError, type ChangeRequest } from "@t3tools/contracts";
+import { SourceControlProviderError } from "@t3tools/contracts";
 
 import * as BitbucketApi from "./BitbucketApi.ts";
-import type { NormalizedBitbucketPullRequestRecord } from "./bitbucketPullRequests.ts";
+import { toBitbucketChangeRequest } from "./bitbucketPullRequests.ts";
 import * as SourceControlProvider from "./SourceControlProvider.ts";
 import type { SourceControlApiDiscoverySpec } from "./SourceControlProviderDiscovery.ts";
-
-function toChangeRequest(summary: NormalizedBitbucketPullRequestRecord): ChangeRequest {
-  return {
-    provider: "bitbucket",
-    number: summary.number,
-    title: summary.title,
-    url: summary.url,
-    baseRefName: summary.baseRefName,
-    headRefName: summary.headRefName,
-    state: summary.state,
-    ...(summary.isDraft === true ? { isDraft: true } : {}),
-    updatedAt: summary.updatedAt ?? Option.none(),
-    ...(summary.isCrossRepository !== undefined
-      ? { isCrossRepository: summary.isCrossRepository }
-      : {}),
-    ...(summary.headRepositoryNameWithOwner !== undefined
-      ? { headRepositoryNameWithOwner: summary.headRepositoryNameWithOwner }
-      : {}),
-    ...(summary.headRepositoryOwnerLogin !== undefined
-      ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
-      : {}),
-  };
-}
 
 export const make = Effect.gen(function* () {
   const bitbucket = yield* BitbucketApi.BitbucketApi;
@@ -47,7 +23,7 @@ export const make = Effect.gen(function* () {
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
         })
         .pipe(
-          Effect.map((items) => items.map(toChangeRequest)),
+          Effect.map((items) => items.map((item) => toBitbucketChangeRequest("bitbucket", item))),
           Effect.mapError(
             (error) =>
               new SourceControlProviderError({
@@ -65,7 +41,7 @@ export const make = Effect.gen(function* () {
     },
     getChangeRequest: (input) =>
       bitbucket.getPullRequest(input).pipe(
-        Effect.map(toChangeRequest),
+        Effect.map((item) => toBitbucketChangeRequest("bitbucket", item)),
         Effect.mapError(
           (error) =>
             new SourceControlProviderError({
