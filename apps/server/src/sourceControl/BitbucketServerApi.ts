@@ -303,6 +303,8 @@ export class BitbucketServerApi extends Context.Service<
       readonly method: "GET" | "POST" | "PUT" | "DELETE";
       readonly url: string;
       readonly body?: string;
+      /** A media type to ask for, where an endpoint answers JSON unless told otherwise. */
+      readonly accept?: string;
       readonly maxBytes?: number;
     }) => Effect.Effect<
       { readonly body: string; readonly truncated: boolean },
@@ -384,7 +386,8 @@ function connectionFromConfig(
   });
 }
 
-function parseRepositoryName(value: string): BitbucketServerRepositoryLocator | null {
+/** `PROJECTKEY/repo-slug`, the last two segments of whatever spelling arrived. */
+export function parseRepositoryName(value: string): BitbucketServerRepositoryLocator | null {
   const normalized = value.trim().replace(/\.git$/u, "");
   const parts = normalized.split("/").filter((part) => part.length > 0);
   const projectKey = parts.at(-2);
@@ -695,7 +698,9 @@ export const make = Effect.gen(function* () {
           }),
         );
       }
-      const base = HttpClientRequest.make(input.method)(url);
+      const base = HttpClientRequest.make(input.method)(url).pipe(
+        input.accept === undefined ? (request) => request : HttpClientRequest.accept(input.accept),
+      );
       const withBody =
         input.body === undefined
           ? base

@@ -1,0 +1,632 @@
+import { assert, it, vi } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+
+import * as BitbucketServerApi from "../sourceControl/BitbucketServerApi.ts";
+import * as BitbucketServerPullRequestApi from "./BitbucketServerPullRequestApi.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+
+const HOST = "https://bitbucket.example.com/bitbucket";
+const API = `${HOST}/rest/api/1.0`;
+const REPO = `${API}/projects/~OHCOHEN/repos/testing-repo`;
+const PR_URL =
+  "https://bitbucket.example.com/bitbucket/users/ohcohen/repos/testing-repo/pull-requests/2";
+
+/** Captured from a Data Center 9.4 host, with the hostname scrubbed. */
+const tokenUser = {
+  name: "access-token-user/2/11754",
+  active: true,
+  displayName: "Access Token User - Cohen, Ohad testing-repo",
+  id: 59666,
+  slug: "access-token-user_2_11754",
+  type: "SERVICE",
+};
+const ohcohen = { name: "ohcohen", displayName: "Cohen, Ohad", id: 30567, slug: "ohcohen" };
+const repository = {
+  slug: "testing-repo",
+  id: 11754,
+  name: "testing-repo",
+  project: { key: "~OHCOHEN", id: 277, name: "Cohen, Ohad", type: "PERSONAL" },
+};
+
+function pullRequestJson(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 2,
+    version: 1,
+    title: "Live verification PR",
+    description: "Created by the T3 Code Data Center adapter (live verification).",
+    state: "OPEN",
+    draft: false,
+    createdDate: 1789242749816,
+    updatedDate: 1789245012563,
+    closedDate: null,
+    fromRef: {
+      id: "refs/heads/feature/dc-live",
+      displayId: "feature/dc-live",
+      latestCommit: "5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+      repository,
+    },
+    toRef: {
+      id: "refs/heads/main",
+      displayId: "main",
+      latestCommit: "a35a529320a97c51808f6647eb1f59518371b3e9",
+      repository,
+    },
+    author: { user: tokenUser, role: "AUTHOR", approved: false, status: "UNAPPROVED" },
+    reviewers: [{ user: ohcohen, role: "REVIEWER", approved: true, status: "APPROVED" }],
+    participants: [],
+    links: { self: [{ href: PR_URL }] },
+    ...overrides,
+  };
+}
+
+function pageJson(values: ReadonlyArray<unknown>, extra: Record<string, unknown> = {}) {
+  return Response.json({
+    size: values.length,
+    limit: 100,
+    isLastPage: true,
+    start: 0,
+    values,
+    ...extra,
+  });
+}
+
+const RAW_DIFF = [
+  "diff --git src://LIVE.md dst://LIVE.md",
+  "new file mode 100644",
+  "index 0000000..e23fe64",
+  "--- /dev/null",
+  "+++ dst://LIVE.md",
+  "@@ -0,0 +1 @@",
+  "+live",
+  "",
+].join("\n");
+
+function makeLayer(input: {
+  readonly response: (request: HttpClientRequest.HttpClientRequest) => Response;
+  readonly env?: Record<string, string>;
+}) {
+  const execute = vi.fn((request: HttpClientRequest.HttpClientRequest) =>
+    Effect.succeed(HttpClientResponse.fromWeb(request, input.response(request))),
+  );
+  const layer = BitbucketServerPullRequestApi.layer.pipe(
+    Layer.provide(BitbucketServerApi.layer),
+    Layer.provide(
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => execute(request)),
+      ),
+    ),
+    // Repositories arrive by name here, so no checkout is ever consulted.
+    Layer.provide(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
+    Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+    Layer.provide(
+      ConfigProvider.layer(
+        ConfigProvider.fromEnv({
+          env: input.env ?? {
+            T3CODE_BITBUCKET_SERVER_URL: `${HOST}/`,
+            T3CODE_BITBUCKET_SERVER_TOKEN: "dc-token",
+          },
+        }),
+      ),
+    ),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return { execute, layer };
+}
+
+/** The nth request sent, as method, url and the headers the host would see. */
+function requestAt(execute: ReturnType<typeof makeLayer>["execute"], index: number) {
+  const request = execute.mock.calls[index]?.[0];
+  assert.isDefined(request);
+  return request;
+}
+
+function urlOf(request: HttpClientRequest.HttpClientRequest): URL {
+  const url = new URL(request.url);
+  for (const [key, value] of request.urlParams.params) url.searchParams.append(key, value);
+  return url;
+}
+
+it.effect("names the token's account from the probe, with the bearer token on the wire", () => {
+  const { execute, layer } = makeLayer({
+    response: () =>
+      Response.json(
+        { values: [] },
+        { headers: { "X-AUSERNAME": "access-token-user%2F2%2F11754" } },
+      ),
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const viewer = yield* api.getViewer();
+
+    assert.strictEqual(viewer, "access-token-user/2/11754");
+    assert.strictEqual(requestAt(execute, 0).headers.authorization, "Bearer dc-token");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "reports a refused token as unauthenticated, and missing configuration the same way",
+  () => {
+    const refused = makeLayer({ response: () => new Response("", { status: 401 }) });
+    const unconfigured = makeLayer({
+      response: () => Response.json({}),
+      env: { T3CODE_BITBUCKET_SERVER_TOKEN: "dc-token" },
+    });
+
+    return Effect.gen(function* () {
+      const refusedError = yield* Effect.flip(
+        Effect.flatMap(BitbucketServerPullRequestApi.BitbucketServerPullRequestApi, (api) =>
+          api.getViewer(),
+        ),
+      ).pipe(Effect.provide(refused.layer));
+      assert.strictEqual(refusedError._tag, "BitbucketServerViewerUnavailableError");
+      assert.strictEqual(
+        refusedError._tag === "BitbucketServerViewerUnavailableError" ? refusedError.reason : null,
+        "unauthenticated",
+      );
+
+      const unconfiguredError = yield* Effect.flip(
+        Effect.flatMap(BitbucketServerPullRequestApi.BitbucketServerPullRequestApi, (api) =>
+          api.getViewer(),
+        ),
+      ).pipe(Effect.provide(unconfigured.layer));
+      assert.strictEqual(unconfiguredError._tag, "BitbucketServerViewerUnavailableError");
+      assert.match(
+        unconfiguredError.detail,
+        /T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN/u,
+      );
+      assert.strictEqual(unconfigured.execute.mock.calls.length, 0);
+    });
+  },
+);
+
+it.effect("reads write permission from the repository search, matched on project and slug", () => {
+  const { execute, layer } = makeLayer({
+    response: () => pageJson([{ ...repository, project: { key: "OTHER" } }, repository]),
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const canWrite = yield* api.getRepositoryPermission({ repository: "~ohcohen/testing-repo" });
+
+    assert.isTrue(canWrite);
+    const url = urlOf(requestAt(execute, 0));
+    assert.strictEqual(url.pathname, "/bitbucket/rest/api/1.0/repos");
+    assert.strictEqual(url.searchParams.get("name"), "testing-repo");
+    assert.strictEqual(url.searchParams.get("permission"), "REPO_WRITE");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("denies write where the search names other repositories only", () => {
+  const { layer } = makeLayer({
+    response: () => pageJson([{ ...repository, slug: "testing-repo-two" }]),
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    assert.isFalse(yield* api.getRepositoryPermission({ repository: "~OHCOHEN/testing-repo" }));
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("lists with state, involvement and free text as host-side filters", () => {
+  const { execute, layer } = makeLayer({ response: () => pageJson([pullRequestJson()]) });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const batch = yield* api.listPullRequests({
+      repository: "~OHCOHEN/testing-repo",
+      state: "closed",
+      involvement: "reviewing",
+      viewer: "ohcohen",
+      limit: 50,
+      query: " live ",
+    });
+
+    assert.strictEqual(batch.items.length, 1);
+    assert.isFalse(batch.truncated);
+    assert.strictEqual(batch.cursorAdvance, 1);
+    assert.deepStrictEqual(batch.items[0]?.reviewRequestLogins, ["ohcohen"]);
+    const url = urlOf(requestAt(execute, 0));
+    assert.strictEqual(
+      url.pathname,
+      "/bitbucket/rest/api/1.0/projects/~OHCOHEN/repos/testing-repo/pull-requests",
+    );
+    assert.strictEqual(url.searchParams.get("state"), "DECLINED");
+    assert.strictEqual(url.searchParams.get("role.1"), "REVIEWER");
+    assert.strictEqual(url.searchParams.get("username.1"), "ohcohen");
+    assert.strictEqual(url.searchParams.get("filterText"), "live");
+    assert.strictEqual(url.searchParams.get("order"), "NEWEST");
+    assert.strictEqual(url.searchParams.get("start"), "0");
+    assert.strictEqual(url.searchParams.get("limit"), "50");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "asks for the author role when listing authored, and no role at all for everything",
+  () => {
+    const { execute, layer } = makeLayer({ response: () => pageJson([]) });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const target = { repository: "~OHCOHEN/testing-repo", viewer: "ohcohen", limit: 20 } as const;
+      yield* api.listPullRequests({ ...target, state: "all", involvement: "authored" });
+      yield* api.listPullRequests({ ...target, state: "open", involvement: "all" });
+
+      const authored = urlOf(requestAt(execute, 0));
+      assert.strictEqual(authored.searchParams.get("state"), "ALL");
+      assert.strictEqual(authored.searchParams.get("role.1"), "AUTHOR");
+      const everything = urlOf(requestAt(execute, 1));
+      assert.strictEqual(everything.searchParams.get("state"), "OPEN");
+      assert.isNull(everything.searchParams.get("role.1"));
+      assert.isNull(everything.searchParams.get("filterText"));
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("carries on from the cursor's count and follows nextPageStart to fill the page", () => {
+  const { execute, layer } = makeLayer({
+    response: (request) => {
+      const start = urlOf(request).searchParams.get("start");
+      return start === "40"
+        ? pageJson([pullRequestJson({ id: 41 }), pullRequestJson({ id: 42 })], {
+            isLastPage: false,
+            nextPageStart: 42,
+          })
+        : pageJson([pullRequestJson({ id: 43 }), pullRequestJson({ id: 44 })], {
+            isLastPage: false,
+            nextPageStart: 44,
+          });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const batch = yield* api.listPullRequests({
+      repository: "~OHCOHEN/testing-repo",
+      state: "open",
+      involvement: "all",
+      viewer: "ohcohen",
+      limit: 3,
+      cursor: { updatedBefore: "2026-09-12T20:30:12.563Z", delivered: 40 },
+    });
+
+    assert.deepStrictEqual(
+      batch.items.map((item) => item.number),
+      [41, 42, 43],
+    );
+    // The host handed back a fourth row it was not asked for; it is more to come and the cursor
+    // stops before it.
+    assert.isTrue(batch.truncated);
+    assert.strictEqual(batch.cursorAdvance, 3);
+    assert.strictEqual(urlOf(requestAt(execute, 0)).searchParams.get("start"), "40");
+    assert.strictEqual(urlOf(requestAt(execute, 0)).searchParams.get("limit"), "3");
+    assert.strictEqual(urlOf(requestAt(execute, 1)).searchParams.get("start"), "42");
+    // Only the one row still wanted is asked for on the second page.
+    assert.strictEqual(urlOf(requestAt(execute, 1)).searchParams.get("limit"), "1");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reads the merge check, the head commit's build statuses and the commits", () => {
+  const { execute, layer } = makeLayer({
+    response: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/merge")) {
+        return Response.json({
+          canMerge: false,
+          conflicted: true,
+          outcome: "CONFLICTED",
+          vetoes: [],
+        });
+      }
+      if (path.includes("/rest/build-status/1.0/commits/")) {
+        return pageJson([
+          { state: "SUCCESSFUL", key: "CI", name: "CI build", url: "https://ci/2", dateAdded: 2 },
+        ]);
+      }
+      if (path.endsWith("/changes")) {
+        return pageJson([
+          { path: { toString: "LIVE.md" }, type: "ADD" },
+          { path: { toString: "B.md" }, type: "MODIFY" },
+        ]);
+      }
+      if (path.endsWith("/commits")) {
+        return pageJson([
+          {
+            id: "5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+            author: ohcohen,
+            committerTimestamp: 1789242570000,
+            message: "Newest",
+          },
+          {
+            id: "a35a529320a97c51808f6647eb1f59518371b3e9",
+            author: ohcohen,
+            committerTimestamp: 1789241851000,
+            message: "Oldest",
+          },
+        ]);
+      }
+      return new Response("", { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const target = { repository: "~OHCOHEN/testing-repo", number: 2 };
+    const mergeability = yield* api.getMergeability(target);
+    const checks = yield* api.listChecks({ commit: "5e8770617aea7591ffda6a0fbe82149cf9a739a8" });
+    const commits = yield* api.listCommits(target);
+    const changedFiles = yield* api.getChangedFileCount(target);
+
+    assert.strictEqual(mergeability, "conflicting");
+    assert.strictEqual(changedFiles, 2);
+    assert.deepStrictEqual(checks, [
+      { name: "CI build", status: "success", description: null, url: "https://ci/2" },
+    ]);
+    assert.deepStrictEqual(
+      commits.map((commit) => commit.messageHeadline),
+      ["Oldest", "Newest"],
+    );
+    assert.strictEqual(requestAt(execute, 0).url, `${REPO}/pull-requests/2/merge`);
+    assert.strictEqual(
+      new URL(requestAt(execute, 1).url).pathname,
+      "/bitbucket/rest/build-status/1.0/commits/5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+    );
+    assert.strictEqual(
+      new URL(requestAt(execute, 2).url).pathname,
+      `/bitbucket/rest/api/1.0/projects/~OHCOHEN/repos/testing-repo/pull-requests/2/commits`,
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("walks the activities feed across pages and reports a cut-off walk as truncated", () => {
+  const anchor = { line: 1, lineType: "ADDED", fileType: "TO", path: "LIVE.md", orphaned: false };
+  const { execute, layer } = makeLayer({
+    response: (request) => {
+      const start = urlOf(request).searchParams.get("start");
+      return start === "0"
+        ? pageJson(
+            [
+              {
+                id: 2,
+                createdDate: 1789244976383,
+                user: tokenUser,
+                action: "COMMENTED",
+                commentAction: "ADDED",
+                comment: {
+                  id: 211902,
+                  text: "Inline",
+                  author: tokenUser,
+                  createdDate: 1789244976377,
+                  anchor,
+                  comments: [
+                    {
+                      id: 211904,
+                      text: "Reply",
+                      author: ohcohen,
+                      createdDate: 1789245011190,
+                      comments: [],
+                    },
+                  ],
+                },
+              },
+            ],
+            { isLastPage: false, nextPageStart: 1 },
+          )
+        : pageJson([
+            {
+              id: 1,
+              createdDate: 1789244975716,
+              user: tokenUser,
+              action: "COMMENTED",
+              commentAction: "ADDED",
+              comment: {
+                id: 211901,
+                text: "General",
+                author: tokenUser,
+                createdDate: 1789244975713,
+              },
+            },
+            { id: 0, createdDate: 1789242750427, user: tokenUser, action: "OPENED" },
+          ]);
+    },
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const activity = yield* api.listActivities({
+      repository: "~OHCOHEN/testing-repo",
+      number: 2,
+      pullRequestUrl: PR_URL,
+    });
+
+    assert.deepStrictEqual(
+      activity.comments.map((comment) => [comment.id, comment.kind]),
+      [
+        ["211901", "issue-comment"],
+        ["211902", "review-comment"],
+        ["211904", "review-comment"],
+      ],
+    );
+    assert.strictEqual(activity.threads.length, 1);
+    assert.deepStrictEqual(
+      activity.threads[0]?.comments.map((comment) => comment.id),
+      ["211902", "211904"],
+    );
+    assert.isFalse(activity.truncated);
+    assert.strictEqual(urlOf(requestAt(execute, 1)).searchParams.get("start"), "1");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("rewrites the raw patch to git's spelling, and asks a commit's endpoint for text", () => {
+  const { execute, layer } = makeLayer({
+    response: () => new Response(RAW_DIFF, { headers: { "content-type": "text/plain" } }),
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const target = { repository: "~OHCOHEN/testing-repo", number: 2 };
+    const whole = yield* api.getPullRequestDiff(target);
+    const one = yield* api.getPullRequestDiff({
+      ...target,
+      commit: "5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+    });
+
+    assert.isFalse(whole.truncated);
+    assert.match(whole.patch, /^diff --git a\/LIVE\.md b\/LIVE\.md\n/u);
+    assert.include(whole.patch, "\n+++ b/LIVE.md\n");
+    assert.strictEqual(one.patch, whole.patch);
+    assert.strictEqual(requestAt(execute, 0).url, `${REPO}/pull-requests/2.diff`);
+    assert.isUndefined(requestAt(execute, 0).headers.accept);
+    assert.strictEqual(
+      requestAt(execute, 1).url,
+      `${REPO}/commits/5e8770617aea7591ffda6a0fbe82149cf9a739a8/diff`,
+    );
+    assert.strictEqual(requestAt(execute, 1).headers.accept, "text/plain");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("refuses a commit that is not a sha before anything is sent", () => {
+  const { execute, layer } = makeLayer({ response: () => new Response(RAW_DIFF) });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const error = yield* Effect.flip(
+      api.getPullRequestDiff({ repository: "~OHCOHEN/testing-repo", number: 2, commit: "../etc" }),
+    );
+
+    assert.strictEqual(error._tag, "BitbucketServerCommitShaError");
+    assert.strictEqual(execute.mock.calls.length, 0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reads both sides of a changed file at the merge base and the source tip", () => {
+  const { execute, layer } = makeLayer({
+    response: (request) => {
+      const url = urlOf(request);
+      if (url.pathname.endsWith("/pull-requests/2")) return Response.json(pullRequestJson());
+      if (url.pathname.endsWith("/merge-base")) {
+        return Response.json({
+          id: "a35a529320a97c51808f6647eb1f59518371b3e9",
+          displayId: "a35a529320a",
+        });
+      }
+      return new Response(`contents at ${url.searchParams.get("at")}`);
+    },
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const contents = yield* api.getDiffFileContents({
+      repository: "~OHCOHEN/testing-repo",
+      number: 2,
+      changeType: "rename-changed",
+      oldPath: "docs/old name.md",
+      newPath: "docs/new.md",
+    });
+
+    assert.deepStrictEqual(contents, {
+      oldContents: "contents at a35a529320a97c51808f6647eb1f59518371b3e9",
+      newContents: "contents at 5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+    });
+    const raw = execute.mock.calls
+      .map((call) => call[0].url)
+      .filter((url) => url.includes("/raw/"))
+      .toSorted();
+    assert.deepStrictEqual(raw, [
+      `${REPO}/raw/docs/new.md?at=5e8770617aea7591ffda6a0fbe82149cf9a739a8`,
+      `${REPO}/raw/docs/old%20name.md?at=a35a529320a97c51808f6647eb1f59518371b3e9`,
+    ]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "reads nothing for the missing side of a new or deleted file, and a commit's own parent",
+  () => {
+    const { execute, layer } = makeLayer({
+      response: (request) => {
+        const url = urlOf(request);
+        if (url.pathname.endsWith("/commits/5e8770617aea7591ffda6a0fbe82149cf9a739a8")) {
+          return Response.json({
+            id: "5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+            parents: [{ id: "a35a529320a97c51808f6647eb1f59518371b3e9" }],
+          });
+        }
+        return new Response(`contents at ${url.searchParams.get("at")}`);
+      },
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const target = {
+        repository: "~OHCOHEN/testing-repo",
+        number: 2,
+        commit: "5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+      };
+      const added = yield* api.getDiffFileContents({
+        ...target,
+        changeType: "new",
+        oldPath: "/dev/null",
+        newPath: "LIVE.md",
+      });
+      const removed = yield* api.getDiffFileContents({
+        ...target,
+        changeType: "deleted",
+        oldPath: "GONE.md",
+        newPath: "/dev/null",
+      });
+
+      assert.deepStrictEqual(added, {
+        oldContents: "",
+        newContents: "contents at 5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+      });
+      assert.deepStrictEqual(removed, {
+        oldContents: "contents at a35a529320a97c51808f6647eb1f59518371b3e9",
+        newContents: "",
+      });
+      const raw = execute.mock.calls
+        .map((call) => call[0].url)
+        .filter((url) => url.includes("/raw/"));
+      assert.deepStrictEqual(raw, [
+        `${REPO}/raw/LIVE.md?at=5e8770617aea7591ffda6a0fbe82149cf9a739a8`,
+        `${REPO}/raw/GONE.md?at=a35a529320a97c51808f6647eb1f59518371b3e9`,
+      ]);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("surfaces a 429 with the instant the host asked to be retried at", () => {
+  const { layer } = makeLayer({
+    response: () => new Response("", { status: 429, headers: { "Retry-After": "30" } }),
+  });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const error = yield* Effect.flip(
+      api.getPullRequest({ repository: "~OHCOHEN/testing-repo", number: 2 }),
+    );
+
+    assert.strictEqual(error._tag, "BitbucketServerResponseError");
+    if (error._tag === "BitbucketServerResponseError") {
+      assert.strictEqual(error.status, 429);
+      assert.isNumber(error.retryAt);
+    }
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("refuses a repository that is not PROJECTKEY/repo-slug without sending anything", () => {
+  const { execute, layer } = makeLayer({ response: () => Response.json({}) });
+
+  return Effect.gen(function* () {
+    const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+    const error = yield* Effect.flip(api.getPullRequest({ repository: "testing-repo", number: 2 }));
+
+    assert.strictEqual(error._tag, "BitbucketServerRepositoryUnsupportedError");
+    assert.strictEqual(execute.mock.calls.length, 0);
+  }).pipe(Effect.provide(layer));
+});
