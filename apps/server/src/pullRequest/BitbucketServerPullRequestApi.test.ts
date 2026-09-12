@@ -1,4 +1,4 @@
-import { assert, it, vi } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -629,4 +629,476 @@ it.effect("refuses a repository that is not PROJECTKEY/repo-slug without sending
     assert.strictEqual(error._tag, "BitbucketServerRepositoryUnsupportedError");
     assert.strictEqual(execute.mock.calls.length, 0);
   }).pipe(Effect.provide(layer));
+});
+
+/** The JSON document a write sent, as the host would read it. */
+function bodyOf(request: HttpClientRequest.HttpClientRequest): unknown {
+  const raw = (request.body as { readonly body?: Uint8Array }).body;
+  assert.ok(raw);
+  return JSON.parse(new TextDecoder().decode(raw));
+}
+
+const TARGET = { repository: "~OHCOHEN/testing-repo", number: 2 };
+
+/** Every write reads the pull request first for its version; the rest is per test. */
+function writeHost(
+  respond: (request: HttpClientRequest.HttpClientRequest, url: URL) => Response | undefined,
+) {
+  return (request: HttpClientRequest.HttpClientRequest): Response => {
+    const url = urlOf(request);
+    const answer = respond(request, url);
+    if (answer !== undefined) return answer;
+    if (request.method === "GET" && url.pathname.endsWith("/pull-requests/2")) {
+      return Response.json(pullRequestJson({ version: 4 }));
+    }
+    return Response.json({}, { headers: { "X-AUSERNAME": "ohcohen" } });
+  };
+}
+
+describe("runAction", () => {
+  it.effect("merges with the pull request's version and the host's name for the strategy", () => {
+    const { execute, layer } = makeLayer({ response: writeHost(() => undefined) });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      yield* api.runAction({ ...TARGET, action: "merge", mergeMethod: "squash" });
+      yield* api.runAction({ ...TARGET, action: "merge", mergeMethod: "rebase" });
+      yield* api.runAction({ ...TARGET, action: "merge", mergeMethod: "merge" });
+      yield* api.runAction({ ...TARGET, action: "merge" });
+
+      const merges = execute.mock.calls
+        .map((call) => call[0])
+        .filter((request) => request.method === "POST");
+      assert.strictEqual(merges.length, 4);
+      for (const request of merges)
+        assert.strictEqual(request.url, `${REPO}/pull-requests/2/merge`);
+      assert.deepStrictEqual(merges.map(bodyOf), [
+        { version: 4, strategyId: "squash" },
+        { version: 4, strategyId: "rebase-no-ff" },
+        { version: 4, strategyId: "no-ff" },
+        { version: 4 },
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("hands over the host's own words when the repository has disabled the strategy", () => {
+    const { layer } = makeLayer({
+      response: writeHost((request, url) =>
+        request.method === "POST" && url.pathname.endsWith("/merge")
+          ? Response.json(
+              {
+                errors: [
+                  {
+                    message: "The merge strategy 'squash' is not enabled for this repository.",
+                    exceptionName: "com.atlassian.bitbucket.pull.PullRequestMergeVetoedException",
+                  },
+                ],
+              },
+              { status: 409 },
+            )
+          : undefined,
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const error = yield* Effect.flip(
+        api.runAction({ ...TARGET, action: "merge", mergeMethod: "squash" }),
+      );
+
+      assert.strictEqual(error._tag, "BitbucketServerResponseError");
+      assert.include(
+        error.detail,
+        "HTTP 409: The merge strategy 'squash' is not enabled for this repository.",
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("declines and reopens through their own endpoints, each with the version", () => {
+    const { execute, layer } = makeLayer({ response: writeHost(() => undefined) });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      yield* api.runAction({ ...TARGET, action: "close" });
+      yield* api.runAction({ ...TARGET, action: "reopen" });
+
+      const posts = execute.mock.calls
+        .map((call) => call[0])
+        .filter((request) => request.method === "POST");
+      assert.deepStrictEqual(
+        posts.map((request) => [request.url, bodyOf(request)]),
+        [
+          [`${REPO}/pull-requests/2/decline`, { version: 4 }],
+          [`${REPO}/pull-requests/2/reopen`, { version: 4 }],
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses an action this host has no endpoint for without sending anything", () => {
+    const { execute, layer } = makeLayer({ response: writeHost(() => undefined) });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const error = yield* Effect.flip(api.runAction({ ...TARGET, action: "draft" }));
+
+      assert.strictEqual(error._tag, "BitbucketServerActionUnsupportedError");
+      assert.strictEqual(execute.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("updateChangeRequest", () => {
+  it.effect("rewrites the words asked for and sends the reviewers back so they survive", () => {
+    const { execute, layer } = makeLayer({ response: writeHost(() => undefined) });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      yield* api.updateChangeRequest({ ...TARGET, title: "A new title" });
+      yield* api.updateChangeRequest({ ...TARGET, body: "New body." });
+
+      const puts = execute.mock.calls
+        .map((call) => call[0])
+        .filter((request) => request.method === "PUT");
+      assert.strictEqual(puts.length, 2);
+      assert.strictEqual(puts[0]?.url, `${REPO}/pull-requests/2`);
+      // Left out of the PUT, the host reads the reviewer list as emptied, so the current one
+      // travels with every rewrite. The description does survive being left out.
+      assert.deepStrictEqual(bodyOf(puts[0]!), {
+        version: 4,
+        title: "A new title",
+        reviewers: [{ user: { name: "ohcohen" } }],
+      });
+      assert.deepStrictEqual(bodyOf(puts[1]!), {
+        version: 4,
+        description: "New body.",
+        reviewers: [{ user: { name: "ohcohen" } }],
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("surfaces a stale version as the host's own refusal", () => {
+    const { layer } = makeLayer({
+      response: writeHost((request) =>
+        request.method === "PUT"
+          ? Response.json(
+              {
+                errors: [
+                  {
+                    message:
+                      "You are attempting to modify a pull request based on out-of-date information.",
+                    exceptionName: "com.atlassian.bitbucket.pull.PullRequestOutOfDateException",
+                  },
+                ],
+              },
+              { status: 409 },
+            )
+          : undefined,
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const error = yield* Effect.flip(api.updateChangeRequest({ ...TARGET, title: "Late" }));
+
+      assert.strictEqual(error._tag, "BitbucketServerResponseError");
+      if (error._tag === "BitbucketServerResponseError") {
+        assert.strictEqual(error.status, 409);
+        assert.include(error.detail, "out-of-date information");
+      }
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("comments", () => {
+  it.effect("posts a remark, a reply under its parent, and rewrites one with its version", () => {
+    const { execute, layer } = makeLayer({
+      response: writeHost((request, url) =>
+        request.method === "GET" && url.pathname.endsWith("/comments/211903")
+          ? Response.json({ id: 211903, version: 3, text: "old", createdDate: 1789244977593 })
+          : undefined,
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      yield* api.comment({ ...TARGET, body: "true" });
+      yield* api.replyToComment({ ...TARGET, commentId: "211902", body: "agreed" });
+      yield* api.updateComment({ ...TARGET, commentId: "211903", body: "new" });
+
+      const writes = execute.mock.calls
+        .map((call) => call[0])
+        .filter((request) => request.method !== "GET");
+      assert.deepStrictEqual(
+        writes.map((request) => [request.method, request.url, bodyOf(request)]),
+        [
+          ["POST", `${REPO}/pull-requests/2/comments`, { text: "true" }],
+          ["POST", `${REPO}/pull-requests/2/comments`, { text: "agreed", parent: { id: 211902 } }],
+          ["PUT", `${REPO}/pull-requests/2/comments/211903`, { version: 3, text: "new" }],
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("submitReview", () => {
+  it.effect("posts the line comments, then the summary, then approves as the viewer", () => {
+    const { execute, layer } = makeLayer({
+      response: writeHost((request, url) =>
+        request.method === "GET" && url.pathname.endsWith("/users/ohcohen")
+          ? Response.json(ohcohen)
+          : undefined,
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      yield* api.submitReview({
+        ...TARGET,
+        verdict: "approve",
+        body: "Looks good.",
+        comments: [
+          { path: "LIVE.md", position: { kind: "added", newLine: 1 }, body: "nice" },
+          {
+            path: "new.md",
+            oldPath: "old.md",
+            position: { kind: "context", oldLine: 2, newLine: 3, side: "left" },
+            body: "hm",
+          },
+        ],
+      });
+
+      const writes = execute.mock.calls
+        .map((call) => call[0])
+        .filter((request) => request.method !== "GET");
+      assert.deepStrictEqual(
+        writes.map((request) => [request.method, request.url, bodyOf(request)]),
+        [
+          [
+            "POST",
+            `${REPO}/pull-requests/2/comments`,
+            {
+              text: "nice",
+              anchor: {
+                line: 1,
+                lineType: "ADDED",
+                fileType: "TO",
+                path: "LIVE.md",
+                diffType: "EFFECTIVE",
+              },
+            },
+          ],
+          [
+            "POST",
+            `${REPO}/pull-requests/2/comments`,
+            {
+              text: "hm",
+              anchor: {
+                line: 2,
+                lineType: "CONTEXT",
+                fileType: "FROM",
+                path: "new.md",
+                srcPath: "old.md",
+                diffType: "EFFECTIVE",
+              },
+            },
+          ],
+          ["POST", `${REPO}/pull-requests/2/comments`, { text: "Looks good." }],
+          ["PUT", `${REPO}/pull-requests/2/participants/ohcohen`, { status: "APPROVED" }],
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "finds a service account's slug among the participants when the host redirects its name",
+    () => {
+      const { execute, layer } = makeLayer({
+        response: (request) => {
+          const url = urlOf(request);
+          if (request.method === "GET" && url.pathname.endsWith("/pull-requests/2")) {
+            return Response.json(pullRequestJson());
+          }
+          if (request.method === "GET" && url.pathname.includes("/users/")) {
+            return new Response("<html>login</html>", { status: 200 });
+          }
+          if (request.method === "GET" && url.pathname.endsWith("/participants")) {
+            return pageJson([
+              { user: ohcohen, role: "REVIEWER", approved: false, status: "UNAPPROVED" },
+              { user: tokenUser, role: "PARTICIPANT", approved: false, status: "UNAPPROVED" },
+            ]);
+          }
+          return Response.json({}, { headers: { "X-AUSERNAME": "access-token-user%2F2%2F11754" } });
+        },
+      });
+
+      return Effect.gen(function* () {
+        const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+        yield* api.submitReview({ ...TARGET, verdict: "request-changes", body: "", comments: [] });
+
+        const writes = execute.mock.calls
+          .map((call) => call[0])
+          .filter((request) => request.method !== "GET");
+        assert.deepStrictEqual(
+          writes.map((request) => [request.method, request.url, bodyOf(request)]),
+          [
+            [
+              "PUT",
+              `${REPO}/pull-requests/2/participants/access-token-user_2_11754`,
+              { status: "NEEDS_WORK" },
+            ],
+          ],
+        );
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("posts a comment verdict without touching anybody's status", () => {
+    const { execute, layer } = makeLayer({ response: writeHost(() => undefined) });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      yield* api.submitReview({
+        ...TARGET,
+        verdict: "comment",
+        body: "Just a note.",
+        comments: [],
+      });
+
+      assert.deepStrictEqual(
+        execute.mock.calls.map((call) => [call[0].method, call[0].url]),
+        [["POST", `${REPO}/pull-requests/2/comments`]],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("lets a refused token through as itself rather than as a missing account", () => {
+    const { execute, layer } = makeLayer({
+      response: (request) =>
+        request.method === "GET" && urlOf(request).pathname.includes("/users/")
+          ? new Response("", { status: 401 })
+          : Response.json({}, { headers: { "X-AUSERNAME": "ohcohen" } }),
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const error = yield* Effect.flip(
+        api.submitReview({ ...TARGET, verdict: "approve", body: "", comments: [] }),
+      );
+
+      assert.strictEqual(error._tag, "BitbucketServerResponseError");
+      if (error._tag === "BitbucketServerResponseError") assert.strictEqual(error.status, 401);
+      assert.isFalse(execute.mock.calls.some((call) => call[0].url.endsWith("/participants")));
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("fails by name when the host never says how it addresses the account", () => {
+    const { layer } = makeLayer({
+      response: (request) => {
+        const url = urlOf(request);
+        if (request.method === "GET" && url.pathname.includes("/users/")) {
+          return new Response("", { status: 404 });
+        }
+        if (request.method === "GET" && url.pathname.endsWith("/participants")) {
+          return pageJson([]);
+        }
+        return Response.json({}, { headers: { "X-AUSERNAME": "ghost" } });
+      },
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const error = yield* Effect.flip(
+        api.submitReview({ ...TARGET, verdict: "approve", body: "", comments: [] }),
+      );
+
+      assert.strictEqual(error._tag, "BitbucketServerAccountSlugError");
+      assert.include(error.detail, "ghost");
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("reviewers", () => {
+  it.effect("lists everyone with read access but the author, marking who is already asked", () => {
+    const { execute, layer } = makeLayer({
+      response: writeHost((request, url) =>
+        request.method === "GET" && url.pathname.endsWith("/rest/api/1.0/users")
+          ? pageJson(
+              [
+                { name: "APerepelitsky", displayName: "Perepelitsky, Alek", slug: "aperepelitsky" },
+                tokenUser,
+                ohcohen,
+              ],
+              { isLastPage: false, nextPageStart: 3 },
+            )
+          : undefined,
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      const list = yield* api.listReviewerCandidates(TARGET);
+
+      assert.deepStrictEqual(list, {
+        candidates: [
+          {
+            id: "APerepelitsky",
+            kind: "user",
+            login: "APerepelitsky",
+            name: "Perepelitsky, Alek",
+            avatarUrl: null,
+            isRequested: false,
+          },
+          {
+            id: "ohcohen",
+            kind: "user",
+            login: "ohcohen",
+            name: "Cohen, Ohad",
+            avatarUrl: null,
+            isRequested: true,
+          },
+        ],
+        truncated: true,
+      });
+      const users = execute.mock.calls
+        .map((call) => urlOf(call[0]))
+        .find((url) => url.pathname.endsWith("/rest/api/1.0/users"));
+      assert.isDefined(users);
+      assert.deepStrictEqual(Object.fromEntries(users.searchParams), {
+        "permission.1": "REPO_READ",
+        "permission.1.projectKey": "~OHCOHEN",
+        "permission.1.repositorySlug": "testing-repo",
+        limit: "100",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("writes the reviewer list whole, with the change applied to what is there", () => {
+    const { execute, layer } = makeLayer({ response: writeHost(() => undefined) });
+
+    return Effect.gen(function* () {
+      const api = yield* BitbucketServerPullRequestApi.BitbucketServerPullRequestApi;
+      yield* api.setReviewerRequest({
+        ...TARGET,
+        reviewers: [{ id: "APerepelitsky" }],
+        requested: true,
+      });
+      yield* api.setReviewerRequest({
+        ...TARGET,
+        reviewers: [{ id: "ohcohen" }],
+        requested: false,
+      });
+
+      const puts = execute.mock.calls
+        .map((call) => call[0])
+        .filter((request) => request.method === "PUT");
+      assert.deepStrictEqual(puts.map(bodyOf), [
+        {
+          version: 4,
+          reviewers: [{ user: { name: "ohcohen" } }, { user: { name: "APerepelitsky" } }],
+        },
+        { version: 4, reviewers: [] },
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
 });

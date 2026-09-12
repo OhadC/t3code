@@ -637,11 +637,11 @@ it.effect("wraps Git checkout failures without deriving the message from them", 
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("keeps response bodies out of errors and a 429 Retry-After on them", () => {
+it.effect("keeps raw response bodies out of errors and a 429 Retry-After on them", () => {
   const { layer } = makeLayer({
     response: (request) =>
       request.url.endsWith("/pull-requests/1")
-        ? new Response('{"errors":[{"message":"credential=secret-value"}]}', { status: 403 })
+        ? new Response("<html>credential=secret-value</html>", { status: 403 })
         : new Response("busy", { status: 429, headers: { "Retry-After": "120" } }),
   });
 
@@ -662,6 +662,39 @@ it.effect("keeps response bodies out of errors and a 429 Retry-After on them", (
     assert.instanceOf(limited, BitbucketServerApi.BitbucketServerResponseError);
     assert.strictEqual(limited.status, 429);
     assert.strictEqual(limited.retryAt, 121_000);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("carries the host's own message from a structured errors document", () => {
+  const { layer } = makeLayer({
+    response: () =>
+      Response.json(
+        {
+          errors: [
+            { message: "Squash is not enabled for this repository.", exceptionName: "x" },
+            { message: "  " },
+            { message: "Pick another strategy." },
+          ],
+        },
+        { status: 409 },
+      ),
+  });
+
+  return Effect.gen(function* () {
+    const bitbucket = yield* BitbucketServerApi.BitbucketServerApi;
+    const error = yield* Effect.flip(
+      bitbucket.request({
+        method: "POST",
+        url: "/rest/api/1.0/projects/P/repos/r/pull-requests/1/merge",
+      }),
+    );
+    assert.instanceOf(error, BitbucketServerApi.BitbucketServerResponseError);
+    assert.strictEqual(error.status, 409);
+    assert.strictEqual(
+      error.hostMessage,
+      "Squash is not enabled for this repository. Pick another strategy.",
+    );
+    assert.include(error.message, "HTTP 409: Squash is not enabled for this repository.");
   }).pipe(Effect.provide(layer));
 });
 

@@ -156,8 +156,8 @@ describe("bitbucketServerViewerPermissions", () => {
       actions: ["merge", "close", "reopen"],
       comment: true,
       resolve: false,
-      verdicts: [],
-      requestReviewers: false,
+      verdicts: ["comment", "approve", "request-changes"],
+      requestReviewers: true,
     });
   });
 

@@ -5,6 +5,8 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
   PullRequestActor,
+  PullRequestReviewCommentDraft,
+  PullRequestReviewerCandidate,
   PullRequestCheck,
   PullRequestCheckStatus,
   PullRequestComment,
@@ -28,6 +30,8 @@ const RawUserSchema = Schema.Struct({
   name: Schema.optional(Schema.NullOr(Schema.String)),
   displayName: Schema.optional(Schema.NullOr(Schema.String)),
   emailAddress: Schema.optional(Schema.NullOr(Schema.String)),
+  /** How the host spells the account in a URL path, which is not the name once it holds a slash. */
+  slug: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawParticipantSchema = Schema.Struct({
@@ -275,6 +279,10 @@ const decodeActivityEntry = Schema.decodeUnknownExit(RawActivitySchema);
 const decodeCommitEntry = Schema.decodeUnknownExit(RawCommitSchema);
 const decodeBuildStatusEntry = Schema.decodeUnknownExit(RawBuildStatusSchema);
 const decodeRepositoryEntry = Schema.decodeUnknownExit(RawRepositorySchema);
+const decodeUserEntry = Schema.decodeUnknownExit(RawUserSchema);
+const decodeParticipantEntry = Schema.decodeUnknownExit(RawParticipantSchema);
+const decodeUser = decodeJsonResult(RawUserSchema);
+const decodeComment = decodeJsonResult(RawCommentSchema);
 const decodeMergeCheck = decodeJsonResult(RawMergeCheckSchema);
 const decodeCommitDetail = decodeJsonResult(RawCommitDetailSchema);
 
@@ -580,4 +588,84 @@ export function decodeChangesPageJson(
     nextPageStart:
       decoded.success.isLastPage === true || next === null || next === undefined ? null : next,
   });
+}
+
+/**
+ * One page of `/users?permission.1=REPO_READ&…`: everyone who may be asked to review. The
+ * account name is both the handle shown and what the reviewer list is written with.
+ */
+export function decodeUsersPageJson(
+  raw: string,
+): Result.Result<
+  BitbucketServerPage<Omit<PullRequestReviewerCandidate, "isRequested">>,
+  DecodeFailure
+> {
+  return decodeItems(raw, decodeUserEntry, (user) => {
+    const name = trimmed(user.name);
+    return name === null
+      ? null
+      : { id: name, kind: "user", login: name, name: trimmed(user.displayName), avatarUrl: null };
+  });
+}
+
+/** `/users/{slug}`: the slug the host addresses this account by in a path. */
+export function decodeUserSlugJson(raw: string): Result.Result<string | null, DecodeFailure> {
+  const decoded = decodeUser(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(trimmed(decoded.success.slug))
+    : Result.fail(decoded.failure);
+}
+
+/** One page of a pull request's participants, reduced to the slug of the named account. */
+export function decodeParticipantSlugJson(
+  raw: string,
+  name: string,
+): Result.Result<
+  { readonly slug: string | null; readonly nextPageStart: number | null },
+  DecodeFailure
+> {
+  const decoded = decodeItems(raw, decodeParticipantEntry, (participant) =>
+    trimmed(participant.user?.name) === name ? trimmed(participant.user?.slug) : null,
+  );
+  return Result.map(decoded, (page) => ({
+    slug: page.items[0] ?? null,
+    nextPageStart: page.nextPageStart,
+  }));
+}
+
+/** A comment resource's own version, which a rewrite of it has to send back. */
+export function decodeCommentVersionJson(raw: string): Result.Result<number, DecodeFailure> {
+  const decoded = decodeComment(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(decoded.success.version ?? 0)
+    : Result.fail(decoded.failure);
+}
+
+/**
+ * Where a draft remark sits, in the host's words: the line number counted on the side it was
+ * written against, which kind of diff line that is, and the file's names either side of a rename.
+ */
+export function bitbucketServerCommentAnchor(comment: PullRequestReviewCommentDraft): {
+  readonly line: number;
+  readonly lineType: "ADDED" | "REMOVED" | "CONTEXT";
+  readonly fileType: "FROM" | "TO";
+  readonly path: string;
+  readonly srcPath?: string;
+  readonly diffType: "EFFECTIVE";
+} {
+  const position = comment.position;
+  const at =
+    position.kind === "added"
+      ? { line: position.newLine, lineType: "ADDED" as const, fileType: "TO" as const }
+      : position.kind === "deleted"
+        ? { line: position.oldLine, lineType: "REMOVED" as const, fileType: "FROM" as const }
+        : position.side === "left"
+          ? { line: position.oldLine, lineType: "CONTEXT" as const, fileType: "FROM" as const }
+          : { line: position.newLine, lineType: "CONTEXT" as const, fileType: "TO" as const };
+  return {
+    ...at,
+    path: comment.path,
+    ...(comment.oldPath === undefined ? {} : { srcPath: comment.oldPath }),
+    diffType: "EFFECTIVE",
+  };
 }

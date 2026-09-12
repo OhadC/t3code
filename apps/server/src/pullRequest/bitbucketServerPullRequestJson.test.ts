@@ -2,7 +2,12 @@ import * as Result from "effect/Result";
 import { assert, describe, expect, it } from "vite-plus/test";
 
 import {
+  bitbucketServerCommentAnchor,
   decodeActivitiesJson,
+  decodeCommentVersionJson,
+  decodeParticipantSlugJson,
+  decodeUserSlugJson,
+  decodeUsersPageJson,
   decodeBuildStatusesJson,
   decodeChangesPageJson,
   decodeCommitParentJson,
@@ -507,5 +512,129 @@ describe("decodeChangesPageJson", () => {
       ),
     ).toEqual({ count: 2, nextPageStart: 2 });
     expect(success(decodeChangesPageJson(page([])))).toEqual({ count: 0, nextPageStart: null });
+  });
+});
+
+describe("decodeUsersPageJson", () => {
+  it("offers each account by name, skipping rows without one", () => {
+    const decoded = decodeUsersPageJson(
+      JSON.stringify({
+        values: [
+          { name: "APerepelitsky", displayName: "Perepelitsky, Alek", slug: "aperepelitsky" },
+          { displayName: "nameless" },
+          ohcohen,
+        ],
+        isLastPage: false,
+        nextPageStart: 5,
+      }),
+    );
+
+    assert.ok(Result.isSuccess(decoded));
+    expect(decoded.success).toEqual({
+      items: [
+        {
+          id: "APerepelitsky",
+          kind: "user",
+          login: "APerepelitsky",
+          name: "Perepelitsky, Alek",
+          avatarUrl: null,
+        },
+        { id: "ohcohen", kind: "user", login: "ohcohen", name: "Cohen, Ohad", avatarUrl: null },
+      ],
+      nextPageStart: 5,
+      rawCount: 3,
+    });
+  });
+});
+
+describe("account slugs", () => {
+  it("reads the slug off a user resource", () => {
+    const decoded = decodeUserSlugJson(JSON.stringify(tokenUser));
+    assert.ok(Result.isSuccess(decoded));
+    expect(decoded.success).toBe("access-token-user_2_11754");
+  });
+
+  it("finds the named participant's slug and nobody else's", () => {
+    const page = JSON.stringify({
+      values: [
+        { user: tokenUser, role: "AUTHOR", approved: false, status: "UNAPPROVED" },
+        { user: ohcohen, role: "REVIEWER", approved: false, status: "UNAPPROVED" },
+      ],
+      isLastPage: true,
+    });
+
+    const found = decodeParticipantSlugJson(page, "access-token-user/2/11754");
+    assert.ok(Result.isSuccess(found));
+    expect(found.success).toEqual({ slug: "access-token-user_2_11754", nextPageStart: null });
+
+    const missing = decodeParticipantSlugJson(page, "nobody");
+    assert.ok(Result.isSuccess(missing));
+    expect(missing.success.slug).toBeNull();
+  });
+});
+
+describe("decodeCommentVersionJson", () => {
+  it("reads the version a rewrite must send back", () => {
+    const decoded = decodeCommentVersionJson(
+      JSON.stringify({ id: 211903, version: 3, text: "x", createdDate: 1789244977593 }),
+    );
+    assert.ok(Result.isSuccess(decoded));
+    expect(decoded.success).toBe(3);
+  });
+});
+
+describe("bitbucketServerCommentAnchor", () => {
+  it("counts an added line on the TO side and a removed one on the FROM side", () => {
+    expect(
+      bitbucketServerCommentAnchor({
+        path: "LIVE.md",
+        position: { kind: "added", newLine: 4 },
+        body: "x",
+      }),
+    ).toEqual({
+      line: 4,
+      lineType: "ADDED",
+      fileType: "TO",
+      path: "LIVE.md",
+      diffType: "EFFECTIVE",
+    });
+    expect(
+      bitbucketServerCommentAnchor({
+        path: "LIVE.md",
+        position: { kind: "deleted", oldLine: 9 },
+        body: "x",
+      }),
+    ).toEqual({
+      line: 9,
+      lineType: "REMOVED",
+      fileType: "FROM",
+      path: "LIVE.md",
+      diffType: "EFFECTIVE",
+    });
+  });
+
+  it("anchors a context line to whichever side was selected, naming both paths of a rename", () => {
+    expect(
+      bitbucketServerCommentAnchor({
+        path: "new.md",
+        oldPath: "old.md",
+        position: { kind: "context", oldLine: 2, newLine: 3, side: "left" },
+        body: "x",
+      }),
+    ).toEqual({
+      line: 2,
+      lineType: "CONTEXT",
+      fileType: "FROM",
+      path: "new.md",
+      srcPath: "old.md",
+      diffType: "EFFECTIVE",
+    });
+    expect(
+      bitbucketServerCommentAnchor({
+        path: "new.md",
+        position: { kind: "context", oldLine: 2, newLine: 3, side: "right" },
+        body: "x",
+      }).line,
+    ).toBe(3);
   });
 });

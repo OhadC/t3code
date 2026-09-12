@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   NonNegativeInt,
@@ -14,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { sanitizeBranchFragment } from "@t3tools/shared/git";
+import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import {
@@ -127,10 +129,17 @@ export class BitbucketServerResponseError extends Schema.TaggedError<BitbucketSe
     status: Schema.Int,
     responseBodyLength: NonNegativeInt,
     retryAt: Schema.optional(Schema.Number),
+    /**
+     * What the host said was wrong, out of its structured `errors` list — a disabled merge
+     * strategy, a stale version, a missing e-mail. Nothing else of the body is carried.
+     */
+    hostMessage: Schema.optional(Schema.String),
   },
 ) {
   get detail(): string {
-    return `Bitbucket Data Center returned HTTP ${this.status}.`;
+    return this.hostMessage === undefined
+      ? `Bitbucket Data Center returned HTTP ${this.status}.`
+      : `Bitbucket Data Center returned HTTP ${this.status}: ${this.hostMessage}`;
   }
 
   override get message(): string {
@@ -491,13 +500,34 @@ function responseError(
           }),
       ),
     );
+    const hostMessage = hostErrorMessage(collected.text);
     return yield* new BitbucketServerResponseError({
       operation,
       status: response.status,
       responseBodyLength: collected.text.length,
       retryAt: retryAtFromHeader(response.headers["retry-after"], now),
+      ...(hostMessage === null ? {} : { hostMessage }),
     });
   });
+}
+
+const HostErrorsSchema = Schema.Struct({
+  errors: Schema.Array(Schema.Struct({ message: Schema.optional(Schema.NullOr(Schema.String)) })),
+});
+const decodeHostErrors = decodeJsonResult(HostErrorsSchema);
+const HOST_MESSAGE_MAX_LENGTH = 500;
+
+/** The host's own account of a refusal, or null where the body is not its `errors` document. */
+function hostErrorMessage(body: string): string | null {
+  const decoded = decodeHostErrors(body);
+  if (!Result.isSuccess(decoded)) return null;
+  const message = decoded.success.errors
+    .flatMap((error) => {
+      const text = error.message?.trim() ?? "";
+      return text.length > 0 ? [text] : [];
+    })
+    .join(" ");
+  return message.length === 0 ? null : message.slice(0, HOST_MESSAGE_MAX_LENGTH);
 }
 
 /** @public Service construction is part of the canonical Effect module API. */

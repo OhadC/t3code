@@ -22,16 +22,25 @@ const CAPABILITIES: PullRequestCapabilities = {
   search: true,
   // Data Center's REST API carries no reaction on a pull request or a comment.
   reactions: false,
-  // Reviews and reviewer requests arrive with the write half of this adapter.
-  review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
-  reviewers: { request: false, listCandidates: false },
+  // A thread's resolution is a field on its root comment, rewritten with that comment's version;
+  // not offered until the page has a reason to want it.
+  review: {
+    inlineComment: true,
+    reply: true,
+    resolve: false,
+    verdicts: ["comment", "approve", "request-changes"],
+  },
+  reviewers: { request: true, listCandidates: true },
+  edit: { changeRequest: true, comment: true },
 };
 
 /**
  * What the token may do here, from the one thing Data Center states per caller: whether it
  * holds write permission on the repository. Merging needs it, so that is what narrows. Declining
  * and reopening stay offered: an author may decline their own pull request with read access,
- * and the permission read says nothing about who opened this one.
+ * and the permission read says nothing about who opened this one. Reviewing and asking for a
+ * review are not narrowed either: read access is enough for both, and the host refuses the one
+ * case it will not take — an author judging their own pull request — in its own words.
  */
 export function bitbucketServerViewerPermissions(input: {
   readonly canWrite: boolean;
@@ -41,7 +50,7 @@ export function bitbucketServerViewerPermissions(input: {
     comment: true,
     resolve: false,
     verdicts: CAPABILITIES.review.verdicts,
-    requestReviewers: false,
+    requestReviewers: true,
   };
 }
 
@@ -110,13 +119,14 @@ export const make = Effect.gen(function* () {
         cause: error,
       });
 
-  const unsupported = (operation: string) =>
+  // Only reached if a caller ignores the capabilities above; the service refuses first.
+  const unsupported = (operation: string, detail: string) =>
     Effect.fail(
       new PullRequestProviderError({
         provider: "bitbucket-server",
         operation,
         reason: "failed",
-        detail: "Bitbucket Data Center pull requests cannot be written to from here yet.",
+        detail,
       }),
     );
 
@@ -250,14 +260,89 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("getDiffFileContents"))),
 
-    runAction: () => unsupported("runAction"),
-    comment: () => unsupported("comment"),
-    submitReview: () => unsupported("submitReview"),
-    listReviewerCandidates: () => unsupported("listReviewerCandidates"),
-    setReviewerRequest: () => unsupported("setReviewerRequest"),
-    replyToThread: () => unsupported("replyToThread"),
-    setReaction: () => unsupported("setReaction"),
-    setThreadResolution: () => unsupported("setThreadResolution"),
+    runAction: (input) =>
+      api
+        .runAction({
+          repository: input.repository,
+          number: input.number,
+          action: input.action,
+          ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+        })
+        .pipe(Effect.mapError(fail("runAction"))),
+
+    updateChangeRequest: (input) =>
+      api
+        .updateChangeRequest({
+          repository: input.repository,
+          number: input.number,
+          title: input.title,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("updateChangeRequest"))),
+
+    comment: (input) =>
+      api
+        .comment({ repository: input.repository, number: input.number, body: input.body })
+        .pipe(Effect.mapError(fail("comment"))),
+
+    // Data Center keeps a pull request's remarks and its line comments in the one collection,
+    // so either kind is rewritten the same way.
+    updateComment: (input) =>
+      api
+        .updateComment({
+          repository: input.repository,
+          number: input.number,
+          commentId: input.commentId,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("updateComment"))),
+
+    submitReview: (input) =>
+      api
+        .submitReview({
+          repository: input.repository,
+          number: input.number,
+          verdict: input.verdict,
+          body: input.body,
+          comments: input.comments,
+        })
+        .pipe(Effect.mapError(fail("submitReview"))),
+
+    // Users only: Data Center asks a review of an account, and has no group that stands in for
+    // one on a pull request.
+    listReviewerCandidates: (input) =>
+      api
+        .listReviewerCandidates({ repository: input.repository, number: input.number })
+        .pipe(Effect.mapError(fail("listReviewerCandidates"))),
+
+    setReviewerRequest: (input) =>
+      api
+        .setReviewerRequest({
+          repository: input.repository,
+          number: input.number,
+          reviewers: input.reviewers,
+          requested: input.requested,
+        })
+        .pipe(Effect.mapError(fail("setReviewerRequest"))),
+
+    // A thread's id is its root comment's, which is what a reply names as its parent.
+    replyToThread: (input) =>
+      api
+        .replyToComment({
+          repository: input.repository,
+          number: input.number,
+          commentId: input.threadId,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("replyToThread"))),
+
+    setReaction: () =>
+      unsupported("setReaction", "Bitbucket Data Center does not support reactions."),
+    setThreadResolution: () =>
+      unsupported(
+        "setThreadResolution",
+        "Bitbucket Data Center threads are not resolved from here.",
+      ),
   };
 
   return provider;

@@ -5,28 +5,38 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
+  PullRequestAction,
   PullRequestCheck,
   PullRequestComment,
   PullRequestCommit,
   PullRequestInvolvement,
   PullRequestListState,
+  PullRequestMergeMethod,
   PullRequestMergeability,
+  PullRequestReviewCommentDraft,
   PullRequestReviewThread,
+  PullRequestReviewVerdict,
+  PullRequestReviewerCandidateList,
 } from "@t3tools/contracts";
 
 import * as BitbucketServerApi from "../sourceControl/BitbucketServerApi.ts";
 import type { BitbucketServerRepositoryLocator } from "../sourceControl/bitbucketServerPullRequests.ts";
 import {
+  bitbucketServerCommentAnchor,
   decodeActivitiesJson,
   decodeBuildStatusesJson,
+  decodeCommentVersionJson,
   decodeCommitIdJson,
   decodeCommitParentJson,
   decodeChangesPageJson,
   decodeCommitsJson,
   decodeMergeCheckJson,
+  decodeParticipantSlugJson,
   decodePullRequestJson,
   decodePullRequestPageJson,
   decodeRepositoryPermissionJson,
+  decodeUserSlugJson,
+  decodeUsersPageJson,
   normalizeUnifiedDiff,
   type BitbucketServerPage,
   type BitbucketServerPullRequest,
@@ -99,12 +109,49 @@ export class BitbucketServerCommitShaError extends Schema.TaggedError<BitbucketS
   }
 }
 
+/**
+ * A verdict is written to the participant addressed by slug, and neither the user resource nor
+ * the pull request's participants named one for the token's account.
+ */
+export class BitbucketServerAccountSlugError extends Schema.TaggedError<BitbucketServerAccountSlugError>()(
+  "BitbucketServerAccountSlugError",
+  {
+    account: Schema.String,
+  },
+) {
+  get detail(): string {
+    return `Bitbucket Data Center did not say how it addresses the account ${this.account}, so its review status cannot be set.`;
+  }
+
+  override get message(): string {
+    return `Bitbucket Data Center failed in submitReview: ${this.detail}`;
+  }
+}
+
+/** An action the provider never offers on this host, so nothing on the page can ask for it. */
+export class BitbucketServerActionUnsupportedError extends Schema.TaggedError<BitbucketServerActionUnsupportedError>()(
+  "BitbucketServerActionUnsupportedError",
+  {
+    action: Schema.String,
+  },
+) {
+  get detail(): string {
+    return `Bitbucket Data Center does not support ${this.action} from here.`;
+  }
+
+  override get message(): string {
+    return `Bitbucket Data Center failed in runAction: ${this.detail}`;
+  }
+}
+
 export type BitbucketServerPullRequestApiError =
   | BitbucketServerApi.BitbucketServerApiError
   | BitbucketServerPullRequestReadError
   | BitbucketServerViewerUnavailableError
   | BitbucketServerRepositoryUnsupportedError
-  | BitbucketServerCommitShaError;
+  | BitbucketServerCommitShaError
+  | BitbucketServerAccountSlugError
+  | BitbucketServerActionUnsupportedError;
 
 const API_ROOT = "/rest/api/1.0";
 const BUILD_STATUS_ROOT = "/rest/build-status/1.0";
@@ -207,6 +254,62 @@ export class BitbucketServerPullRequestApi extends Context.Service<
       { readonly oldContents: string; readonly newContents: string },
       BitbucketServerPullRequestApiError
     >;
+
+    /** Merge, decline or reopen, each sent with the pull request's current version. */
+    readonly runAction: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly action: PullRequestAction;
+      readonly mergeMethod?: PullRequestMergeMethod | undefined;
+    }) => Effect.Effect<void, BitbucketServerPullRequestApiError>;
+
+    readonly updateChangeRequest: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly title?: string | undefined;
+      readonly body?: string | undefined;
+    }) => Effect.Effect<void, BitbucketServerPullRequestApiError>;
+
+    readonly comment: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly body: string;
+    }) => Effect.Effect<void, BitbucketServerPullRequestApiError>;
+
+    readonly replyToComment: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, BitbucketServerPullRequestApiError>;
+
+    readonly updateComment: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, BitbucketServerPullRequestApiError>;
+
+    readonly submitReview: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly verdict: PullRequestReviewVerdict;
+      readonly body: string;
+      readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+    }) => Effect.Effect<void, BitbucketServerPullRequestApiError>;
+
+    /** Everyone with read access to the repository, less the author, with current reviewers marked. */
+    readonly listReviewerCandidates: (input: {
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<PullRequestReviewerCandidateList, BitbucketServerPullRequestApiError>;
+
+    readonly setReviewerRequest: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly reviewers: ReadonlyArray<{ readonly id: string }>;
+      readonly requested: boolean;
+    }) => Effect.Effect<void, BitbucketServerPullRequestApiError>;
   }
 >()("t3/pullRequest/BitbucketServerPullRequestApi") {}
 
@@ -260,6 +363,31 @@ function involvementParams(
       ];
     case "all":
       return [];
+  }
+}
+
+/** The host's own names for the three strategies offered; absent takes the repository default. */
+function mergeStrategyId(method: PullRequestMergeMethod | undefined): string | undefined {
+  switch (method) {
+    case "merge":
+      return "no-ff";
+    case "squash":
+      return "squash";
+    case "rebase":
+      return "rebase-no-ff";
+    case undefined:
+      return undefined;
+  }
+}
+
+function participantStatus(verdict: PullRequestReviewVerdict): "APPROVED" | "NEEDS_WORK" | null {
+  switch (verdict) {
+    case "approve":
+      return "APPROVED";
+    case "request-changes":
+      return "NEEDS_WORK";
+    case "comment":
+      return null;
   }
 }
 
@@ -423,28 +551,115 @@ export const make = Effect.gen(function* () {
       })
       .pipe(Effect.map((response) => response.body));
 
-  return BitbucketServerPullRequestApi.of({
-    // The probe is the one request whose answer carries the account: Data Center names the
-    // caller in a response header rather than at any endpoint of its own.
-    getViewer: () =>
-      bitbucket.probeAuth.pipe(
-        Effect.flatMap((auth) => {
-          const detail = Option.getOrElse(
-            auth.detail,
-            () => "Bitbucket Data Center did not name the configured token's account.",
+  // The probe is the one request whose answer carries the account: Data Center names the
+  // caller in a response header rather than at any endpoint of its own.
+  const getViewer: Effect.Effect<string, BitbucketServerPullRequestApiError> =
+    bitbucket.probeAuth.pipe(
+      Effect.flatMap((auth) => {
+        const detail = Option.getOrElse(
+          auth.detail,
+          () => "Bitbucket Data Center did not name the configured token's account.",
+        );
+        if (auth.status === "unauthenticated") {
+          return Effect.fail(
+            new BitbucketServerViewerUnavailableError({ reason: "unauthenticated", detail }),
           );
-          if (auth.status === "unauthenticated") {
-            return Effect.fail(
-              new BitbucketServerViewerUnavailableError({ reason: "unauthenticated", detail }),
-            );
-          }
-          return Option.match(auth.status === "authenticated" ? auth.account : Option.none(), {
-            onNone: () =>
-              Effect.fail(new BitbucketServerViewerUnavailableError({ reason: "unknown", detail })),
-            onSome: Effect.succeed,
-          });
-        }),
+        }
+        return Option.match(auth.status === "authenticated" ? auth.account : Option.none(), {
+          onNone: () =>
+            Effect.fail(new BitbucketServerViewerUnavailableError({ reason: "unknown", detail })),
+          onSome: Effect.succeed,
+        });
+      }),
+    );
+
+  const write = (input: {
+    readonly method: "POST" | "PUT";
+    readonly url: string;
+    readonly body?: Record<string, unknown>;
+  }): Effect.Effect<void, BitbucketServerPullRequestApiError> =>
+    bitbucket
+      .request({
+        method: input.method,
+        url: input.url,
+        ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
+      })
+      .pipe(Effect.asVoid);
+
+  /**
+   * Rewrites the pull request. Left out of the PUT, the host reads the reviewer list as emptied,
+   * so it always travels — the current one unless the patch names another.
+   */
+  const putPullRequest = (
+    path: string,
+    number: number,
+    patch: (current: BitbucketServerPullRequest) => {
+      readonly reviewers?: Iterable<string>;
+      readonly title?: string;
+      readonly description?: string;
+    },
+  ): Effect.Effect<void, BitbucketServerPullRequestApiError> =>
+    getPullRequest(path, number).pipe(
+      Effect.flatMap((current) => {
+        const { reviewers, ...words } = patch(current);
+        return write({
+          method: "PUT",
+          url: `${path}/pull-requests/${number}`,
+          body: {
+            version: current.version,
+            ...words,
+            reviewers: [...(reviewers ?? current.reviewRequestLogins)].map((name) => ({
+              user: { name },
+            })),
+          },
+        });
+      }),
+    );
+
+  /** The host answered for the name, but not with a user: a redirect's page, or nothing at all. */
+  const isNotAUser = (error: BitbucketServerPullRequestApiError) =>
+    error._tag === "BitbucketServerPullRequestReadError" ||
+    (error._tag === "BitbucketServerResponseError" && error.status === 404);
+
+  /**
+   * The slug a participant is addressed by in a path. The user resource answers for a person,
+   * whose slug is their name; a service account's name holds slashes and the host redirects it
+   * away, so the pull request's own participants are searched for it next.
+   */
+  const accountSlug = (
+    path: string,
+    number: number,
+    account: string,
+  ): Effect.Effect<string, BitbucketServerPullRequestApiError> =>
+    read({
+      operation: "getUser",
+      url: `${API_ROOT}/users/${encodeURIComponent(account)}`,
+      decode: decodeUserSlugJson,
+    }).pipe(
+      Effect.catchIf(isNotAUser, () => Effect.succeed(null)),
+      Effect.flatMap((slug) =>
+        slug !== null
+          ? Effect.succeed(slug)
+          : Effect.gen(function* () {
+              const url = `${path}/pull-requests/${number}/participants?limit=${MAX_PAGE_SIZE}`;
+              let start = 0;
+              for (let page = 1; page <= CONVERSATION_PAGES; page += 1) {
+                const decoded = yield* read({
+                  operation: "listParticipants",
+                  url: withStart(url, start),
+                  decode: (body) => decodeParticipantSlugJson(body, account),
+                });
+                if (decoded.slug !== null) return decoded.slug;
+                if (decoded.nextPageStart === null) break;
+                start = decoded.nextPageStart;
+              }
+              return yield* new BitbucketServerAccountSlugError({ account });
+            }),
       ),
+    );
+
+  return BitbucketServerPullRequestApi.of({
+    getViewer: () => getViewer,
 
     listPullRequests: (input) =>
       withRepository(input.repository, (path) =>
@@ -612,6 +827,162 @@ export const make = Effect.gen(function* () {
               Effect.map(([oldContents, newContents]) => ({ oldContents, newContents })),
             ),
           ),
+
+    // Every write that changes the pull request itself sends its current version back, so a
+    // change somebody else made in between is refused by the host rather than overwritten.
+    runAction: (input) =>
+      withRepository(input.repository, (path) => {
+        const endpoint =
+          input.action === "merge"
+            ? "merge"
+            : input.action === "close"
+              ? "decline"
+              : input.action === "reopen"
+                ? "reopen"
+                : null;
+        if (endpoint === null) {
+          return Effect.fail(new BitbucketServerActionUnsupportedError({ action: input.action }));
+        }
+        // A strategy the repository has disabled is refused by the host with its own words,
+        // which is what reaches the user; nothing is pre-read to second-guess it.
+        const strategyId = endpoint === "merge" ? mergeStrategyId(input.mergeMethod) : undefined;
+        return getPullRequest(path, input.number).pipe(
+          Effect.flatMap((current) =>
+            write({
+              method: "POST",
+              url: `${path}/pull-requests/${input.number}/${endpoint}`,
+              body: {
+                version: current.version,
+                ...(strategyId === undefined ? {} : { strategyId }),
+              },
+            }),
+          ),
+        );
+      }),
+
+    updateChangeRequest: (input) =>
+      withRepository(input.repository, (path) =>
+        putPullRequest(path, input.number, () => ({
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.body === undefined ? {} : { description: input.body }),
+        })),
+      ),
+
+    comment: (input) =>
+      withRepository(input.repository, (path) =>
+        write({
+          method: "POST",
+          url: `${path}/pull-requests/${input.number}/comments`,
+          body: { text: input.body },
+        }),
+      ),
+
+    replyToComment: (input) =>
+      withRepository(input.repository, (path) =>
+        write({
+          method: "POST",
+          url: `${path}/pull-requests/${input.number}/comments`,
+          body: { text: input.body, parent: { id: Number(input.commentId) } },
+        }),
+      ),
+
+    // A comment carries a version of its own, read back just before it is rewritten.
+    updateComment: (input) =>
+      withRepository(input.repository, (path) => {
+        const url = `${path}/pull-requests/${input.number}/comments/${encodeURIComponent(
+          input.commentId,
+        )}`;
+        return read({ operation: "getComment", url, decode: decodeCommentVersionJson }).pipe(
+          Effect.flatMap((version) =>
+            write({ method: "PUT", url, body: { version, text: input.body } }),
+          ),
+        );
+      }),
+
+    // Data Center has no pending review, so one is replayed as the requests it is made of: the
+    // line comments, then the summary, then the verdict — last, so a review that fails part-way
+    // is never left standing as an approval.
+    submitReview: (input) =>
+      withRepository(input.repository, (path) =>
+        Effect.gen(function* () {
+          const pullRequest = `${path}/pull-requests/${input.number}`;
+          yield* Effect.forEach(
+            input.comments,
+            (comment) =>
+              write({
+                method: "POST",
+                url: `${pullRequest}/comments`,
+                body: { text: comment.body, anchor: bitbucketServerCommentAnchor(comment) },
+              }),
+            { discard: true },
+          );
+          if (input.body.trim().length > 0) {
+            yield* write({
+              method: "POST",
+              url: `${pullRequest}/comments`,
+              body: { text: input.body },
+            });
+          }
+          const status = participantStatus(input.verdict);
+          if (status === null) return;
+          const viewer = yield* getViewer;
+          const slug = yield* accountSlug(path, input.number, viewer);
+          yield* write({
+            method: "PUT",
+            url: `${pullRequest}/participants/${encodeURIComponent(slug)}`,
+            body: { status },
+          });
+        }),
+      ),
+
+    listReviewerCandidates: (input) =>
+      withRepository(input.repository, (path, locator) =>
+        Effect.all(
+          [
+            getPullRequest(path, input.number),
+            read({
+              operation: "listReviewerCandidates",
+              url: `${API_ROOT}/users?${new URLSearchParams([
+                ["permission.1", "REPO_READ"],
+                ["permission.1.projectKey", locator.projectKey],
+                ["permission.1.repositorySlug", locator.repoSlug],
+                ["limit", String(MAX_PAGE_SIZE)],
+              ]).toString()}`,
+              decode: decodeUsersPageJson,
+            }),
+          ],
+          { concurrency: 2 },
+        ).pipe(
+          Effect.map(([pullRequest, users]) => {
+            const requested = new Set(pullRequest.reviewRequestLogins);
+            const author = pullRequest.author?.login;
+            return {
+              // The author is dropped rather than shown unusable: the host refuses to make the
+              // person who opened a pull request its reviewer.
+              candidates: users.items.flatMap((candidate) =>
+                candidate.login === author
+                  ? []
+                  : [{ ...candidate, isRequested: requested.has(candidate.id) }],
+              ),
+              truncated: users.nextPageStart !== null,
+            };
+          }),
+        ),
+      ),
+
+    // No endpoint adds or removes one reviewer by name: the list is written whole, so the set
+    // that is there is read first and the change applied to it.
+    setReviewerRequest: (input) =>
+      withRepository(input.repository, (path) =>
+        putPullRequest(path, input.number, (current) => {
+          const reviewers = new Set(current.reviewRequestLogins);
+          for (const reviewer of input.reviewers) {
+            if (input.requested) reviewers.add(reviewer.id);
+            else reviewers.delete(reviewer.id);
+          }
+          return { reviewers };
+        }),
+      ),
   });
 });
 
