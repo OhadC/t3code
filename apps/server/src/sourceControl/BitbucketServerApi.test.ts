@@ -18,7 +18,6 @@ import type * as VcsDriver from "../vcs/VcsDriver.ts";
 const API = "https://bitbucket.example.com/bitbucket/rest/api/1.0";
 const REPO = `${API}/projects/~ohcohen/repos/testing-repo`;
 
-// Captured from Bitbucket Data Center 9.4.2, trimmed to the fields the adapter reads.
 const repositoryRef = {
   slug: "testing-repo",
   id: 11754,
@@ -161,7 +160,6 @@ function makeLayer(input: {
       ConfigProvider.layer(
         ConfigProvider.fromEnv({
           env: input.env ?? {
-            // A context path and a trailing slash, both of which the host tolerates.
             T3CODE_BITBUCKET_SERVER_URL: "https://bitbucket.example.com/bitbucket/",
             T3CODE_BITBUCKET_SERVER_TOKEN: "dc-token",
           },
@@ -177,7 +175,6 @@ function makeLayer(input: {
 const requestBody = (request: HttpClientRequest.HttpClientRequest | undefined) => {
   const rawBody = (request?.body as { readonly body?: Uint8Array } | undefined)?.body;
   assert.ok(rawBody);
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
 };
 
@@ -264,7 +261,6 @@ it.effect("reads clone URLs and the default branch for a repository found throug
       sshUrl: "ssh://git@bitbucket.example.com:7999/~ohcohen/testing-repo.git",
     });
     assert.strictEqual(defaultBranch, "main");
-    // The :8443 remote resolves to the configured host: matching is by hostname only.
     assert.deepStrictEqual(
       execute.mock.calls.map((call) => call[0].url),
       [REPO, `${REPO}/default-branch`],

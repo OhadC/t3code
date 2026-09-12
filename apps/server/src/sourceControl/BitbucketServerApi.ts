@@ -38,10 +38,8 @@ export const CONFIGURATION_HINT =
   "Set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server (use an HTTP access token with repository read/write and project read scopes).";
 
 const API_ROOT = "/rest/api/1.0";
-/** A response body past this is cut short, so one huge diff cannot exhaust the server. */
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_PAGE_SIZE = 100;
-/** Pages read for one branch listing before giving up; a branch rarely has more than one. */
 const MAX_LIST_PAGES = 10;
 
 const BitbucketServerEnvConfig = Config.all({
@@ -58,7 +56,6 @@ const BitbucketServerApiOperation = Schema.Literals([
   "createPullRequest",
   "probeAuth",
   "checkoutPullRequest",
-  // The raw escape hatch. Callers name their own operation in their own error.
   "request",
 ]);
 type BitbucketServerApiOperation = typeof BitbucketServerApiOperation.Type;
@@ -76,10 +73,6 @@ export class BitbucketServerNotConfiguredError extends Schema.TaggedError<Bitbuc
   }
 }
 
-/**
- * A `bitbucket`-labelled remote on some other host than the configured one. Loud on purpose:
- * the alternative is a request to the wrong host that fails with a misleading 404.
- */
 export class BitbucketServerHostMismatchError extends Schema.TaggedError<BitbucketServerHostMismatchError>()(
   "BitbucketServerHostMismatchError",
   {
@@ -244,11 +237,9 @@ export class BitbucketServerCheckoutError extends Schema.TaggedError<BitbucketSe
   }
 }
 
-/** A url off the configured host. Refused, because the request carries the account's token. */
 export class BitbucketServerUntrustedUrlError extends Schema.TaggedError<BitbucketServerUntrustedUrlError>()(
   "BitbucketServerUntrustedUrlError",
   {
-    /** The origin only; a rejected url may carry a credential in its query. */
     host: Schema.String,
   },
 ) {
@@ -308,17 +299,10 @@ export class BitbucketServerApi extends Context.Service<
   {
     readonly probeAuth: Effect.Effect<SourceControlProviderAuth, never>;
 
-    /**
-     * One authenticated request, returning the body verbatim. Data Center serves several REST
-     * roots (`/rest/api/1.0`, `/rest/build-status/1.0`, raw diffs), so the url is a path below
-     * the configured base URL — or a whole url, refused unless it is on the configured host.
-     */
     readonly request: (input: {
       readonly method: "GET" | "POST" | "PUT" | "DELETE";
       readonly url: string;
-      /** A JSON document, for the endpoints that take one. */
       readonly body?: string;
-      /** Response bytes to keep; past this the body comes back cut short and marked. */
       readonly maxBytes?: number;
     }) => Effect.Effect<
       { readonly body: string; readonly truncated: boolean },
@@ -369,7 +353,6 @@ export class BitbucketServerApi extends Context.Service<
 >()("t3/sourceControl/BitbucketServerApi") {}
 
 interface BitbucketServerConnection {
-  /** Origin plus optional context path, with no trailing slash. */
   readonly baseUrl: string;
   readonly origin: string;
   readonly hostname: string;
@@ -409,7 +392,6 @@ function parseRepositoryName(value: string): BitbucketServerRepositoryLocator | 
   return parts.length >= 2 && projectKey && repoSlug ? { projectKey, repoSlug } : null;
 }
 
-/** `https://host/scm/KEY/slug.git`, `ssh://git@host:7999/KEY/slug.git`, `git@host:KEY/slug.git`. */
 function parseRemoteUrl(remoteUrl: string): BitbucketServerRepositoryLocator | null {
   const trimmed = remoteUrl.trim();
   const scpMatch = /^[a-zA-Z0-9._-]+@[^:/]+:(.+)$/.exec(trimmed);
@@ -745,8 +727,6 @@ export const make = Effect.gen(function* () {
       );
     });
 
-  // Data Center has no "current user" resource. Any authenticated response names the account
-  // in `X-AUSERNAME`, so a cheap listing doubles as the probe; a bad token gets a 401.
   const probeAuth: BitbucketServerApi["Service"]["probeAuth"] = Option.match(connection, {
     onNone: () =>
       Effect.succeed<SourceControlProviderAuth>({
@@ -769,9 +749,7 @@ export const make = Effect.gen(function* () {
             let account = rawAccount;
             try {
               account = rawAccount === undefined ? undefined : decodeURIComponent(rawAccount);
-            } catch {
-              // An undecodable header is shown as sent.
-            }
+            } catch {}
             return {
               status: "authenticated",
               account: nonEmpty(account),
@@ -886,9 +864,6 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map((branch) => branch.displayId),
       ),
-    // Data Center publishes every pull request's head as `refs/pull-requests/{id}/from` on the
-    // destination repository, so fork pull requests need no extra remote. The same GitVcsDriver
-    // escape hatch the Cloud adapter uses; see the note there before generalizing it.
     checkoutPullRequest: (input) =>
       Effect.gen(function* () {
         const repository = yield* resolveRepository(input);

@@ -22,7 +22,6 @@ export interface NormalizedBitbucketPullRequestRecord {
   readonly headRepositoryOwnerLogin?: string | null;
 }
 
-/** The number behind `#42`, `42`, or a pull request URL on either Bitbucket flavour. */
 export function normalizeBitbucketChangeRequestId(reference: string): string {
   const trimmed = reference.trim().replace(/^#/, "");
   const urlMatch = /(?:pull-requests|pullrequests|pull-request|pull|pr)\/(\d+)(?:\D.*)?$/i.exec(

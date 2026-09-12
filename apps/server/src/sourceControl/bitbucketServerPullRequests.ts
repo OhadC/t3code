@@ -4,7 +4,6 @@ import { PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
 
 import type { NormalizedBitbucketPullRequestRecord } from "./bitbucketPullRequests.ts";
 
-/** A Data Center repository is addressed as `PROJECTKEY/repo-slug`; personal projects are `~user`. */
 export interface BitbucketServerRepositoryLocator {
   readonly projectKey: string;
   readonly repoSlug: string;
@@ -43,7 +42,6 @@ export const BitbucketServerPullRequestSchema = Schema.Struct({
   }),
 });
 
-/** REST 1.0 pages: `values` plus `isLastPage`, and `nextPageStart` while there is more. */
 export const BitbucketServerPullRequestPageSchema = Schema.Struct({
   values: Schema.Array(BitbucketServerPullRequestSchema),
   isLastPage: Schema.Boolean,
@@ -77,8 +75,6 @@ export function normalizeBitbucketServerPullRequestRecord(
         repoSlug: raw.toRef.repository.slug,
       })
     : null;
-  // Project keys are case-insensitive on the host, so the same repository can be spelled
-  // two ways across the two refs.
   const isCrossRepository =
     headRepositoryNameWithOwner !== null &&
     baseRepositoryNameWithOwner !== null &&
