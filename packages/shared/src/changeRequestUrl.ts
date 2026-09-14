@@ -106,21 +106,8 @@ export function changeRequestUrlFor(
   switch (kind) {
     case "github":
       return `https://${host}/${repository}/pull/${number}`;
-    case "forgejo": {
-      try {
-        const remote = new URL(remoteUrl ?? "");
-        if (
-          (remote.protocol === "http:" || remote.protocol === "https:") &&
-          (remote.hostname.toLowerCase() === host.toLowerCase() ||
-            remote.host.toLowerCase() === host.toLowerCase())
-        ) {
-          return `${remote.origin}/${repository}/pulls/${number}`;
-        }
-      } catch {
-        // SSH remotes do not specify the server's web origin.
-      }
-      return `https://${host}/${repository}/pulls/${number}`;
-    }
+    case "forgejo":
+      return `${selfHostedOrigin(host, remoteUrl)}/${repository}/pulls/${number}`;
     case "gitlab":
       return `https://${host}/${repository}/-/merge_requests/${number}`;
     case "bitbucket":
@@ -128,13 +115,29 @@ export function changeRequestUrlFor(
     case "bitbucket-server": {
       const [projectKey, slug, ...rest] = repository.split("/");
       if (!projectKey || !slug || rest.length > 0) return null;
-      return `https://${host}/projects/${projectKey}/repos/${slug}/pull-requests/${number}`;
+      return `${selfHostedOrigin(host, remoteUrl)}/projects/${projectKey}/repos/${slug}/pull-requests/${number}`;
     }
     case "azure-devops":
       return `https://${canonicalRepositoryKey(`${host}/${repository}`.toLowerCase())}/pullrequest/${number}`;
     default:
       return null;
   }
+}
+
+function selfHostedOrigin(host: string, remoteUrl: string | undefined): string {
+  try {
+    const remote = new URL(remoteUrl ?? "");
+    if (
+      (remote.protocol === "http:" || remote.protocol === "https:") &&
+      (remote.hostname.toLowerCase() === host.toLowerCase() ||
+        remote.host.toLowerCase() === host.toLowerCase())
+    ) {
+      return remote.origin;
+    }
+  } catch {
+    // SSH remotes do not specify the server's web origin.
+  }
+  return `https://${host}`;
 }
 
 /** Builds a GitHub URL that remains available when the pull request API cannot be read. */

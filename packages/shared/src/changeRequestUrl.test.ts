@@ -225,4 +225,25 @@ describe("changeRequestUrlFor", () => {
     });
     expect(changeRequestUrlFor("bitbucket-server", "bitbucket.example.com", "web", 42)).toBeNull();
   });
+
+  it.each([
+    ["https://bitbucket.example.com:8443/scm/proj/web.git", "https://bitbucket.example.com:8443"],
+    ["http://bitbucket.example.com:7990/scm/proj/web.git", "http://bitbucket.example.com:7990"],
+    ["ssh://git@bitbucket.example.com:7999/proj/web.git", "https://bitbucket.example.com"],
+    ["https://other.example.com:8443/scm/proj/web.git", "https://bitbucket.example.com"],
+  ])("preserves the matching Data Center web origin from %s", (remoteUrl, origin) => {
+    const url = changeRequestUrlFor(
+      "bitbucket-server",
+      "bitbucket.example.com",
+      "proj/web",
+      42,
+      remoteUrl,
+    );
+    expect(url).toBe(`${origin}/projects/proj/repos/web/pull-requests/42`);
+    expect(parseChangeRequestUrl(url!)).toEqual({
+      host: "bitbucket.example.com",
+      repository: "proj/web",
+      number: 42,
+    });
+  });
 });
