@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { GitCommandError } from "@t3tools/contracts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as BitbucketServerApi from "./BitbucketServerApi.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -166,6 +167,7 @@ function makeLayer(input: {
         }),
       ),
     ),
+    Layer.provideMerge(ServerSettings.layerTest()),
     Layer.provideMerge(NodeServices.layer),
   );
 
@@ -209,11 +211,63 @@ it.effect("reports a rejected token as unauthenticated", () => {
   return Effect.gen(function* () {
     const auth = yield* (yield* BitbucketServerApi.BitbucketServerApi).probeAuth;
 
-    assert.strictEqual(auth.status, "unauthenticated");
-    assert.match(
-      Option.getOrElse(auth.detail, () => ""),
-      /T3CODE_BITBUCKET_SERVER_TOKEN/u,
-    );
+    assert.deepStrictEqual(auth, {
+      status: "unauthenticated",
+      account: Option.none(),
+      host: Option.some("bitbucket.example.com"),
+      detail: Option.some("bitbucket.example.com rejected the configured token (HTTP 401)."),
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "prefers a host and token saved in settings over the environment, without a restart",
+  () => {
+    const { execute, layer } = makeLayer({
+      response: () => Response.json({ size: 0, limit: 1, isLastPage: true, values: [], start: 0 }),
+    });
+    const lastRequest = () => execute.mock.calls.at(-1)?.[0];
+
+    return Effect.gen(function* () {
+      const bitbucket = yield* BitbucketServerApi.BitbucketServerApi;
+      const settings = yield* ServerSettings.ServerSettingsService;
+
+      yield* bitbucket.probeAuth;
+      assert.strictEqual(lastRequest()?.url, `${API}/projects`);
+      assert.strictEqual(lastRequest()?.headers.authorization, "Bearer dc-token");
+
+      yield* settings.updateSettings({
+        bitbucketServer: { url: "https://dc.example.com/context/", token: "saved-token" },
+      });
+      yield* bitbucket.probeAuth;
+      assert.strictEqual(
+        lastRequest()?.url,
+        "https://dc.example.com/context/rest/api/1.0/projects",
+      );
+      assert.strictEqual(lastRequest()?.headers.authorization, "Bearer saved-token");
+
+      yield* settings.updateSettings({ bitbucketServer: { token: "" } });
+      yield* bitbucket.probeAuth;
+      assert.strictEqual(lastRequest()?.url, `${API}/projects`);
+      assert.strictEqual(lastRequest()?.headers.authorization, "Bearer dc-token");
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("never puts a saved token that is unsafe for an HTTP header on the wire", () => {
+  const { execute, layer } = makeLayer({
+    response: () => Response.json({ size: 0, limit: 1, isLastPage: true, values: [], start: 0 }),
+  });
+
+  return Effect.gen(function* () {
+    const bitbucket = yield* BitbucketServerApi.BitbucketServerApi;
+    const settings = yield* ServerSettings.ServerSettingsService;
+
+    yield* settings.updateSettings({
+      bitbucketServer: { url: "https://dc.example.com", token: "saved\ntoken" },
+    });
+    yield* bitbucket.probeAuth;
+    assert.strictEqual(execute.mock.calls.at(-1)?.[0].headers.authorization, "Bearer dc-token");
   }).pipe(Effect.provide(layer));
 });
 
@@ -281,7 +335,7 @@ it.effect("resolves the repository from an ssh remote in the provider context", 
         provider: {
           kind: "bitbucket-server",
           name: "Bitbucket Data Center",
-          baseUrl: "https://bitbucket.example.com:7999",
+          baseUrl: "https://bitbucket.example.com",
         },
         remoteName: "origin",
         remoteUrl: "ssh://git@bitbucket.example.com:7999/PROJ/web.git",

@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
+import * as ServerSettings from "../serverSettings.ts";
 import * as BitbucketServerApi from "../sourceControl/BitbucketServerApi.ts";
 import * as BitbucketServerPullRequestApi from "./BitbucketServerPullRequestApi.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -104,6 +105,7 @@ function makeLayer(input: {
     // Repositories arrive by name here, so no checkout is ever consulted.
     Layer.provide(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+    Layer.provide(ServerSettings.layerTest()),
     Layer.provide(
       ConfigProvider.layer(
         ConfigProvider.fromEnv({

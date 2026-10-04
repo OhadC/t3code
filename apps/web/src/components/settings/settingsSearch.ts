@@ -743,6 +743,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "bitbucket-server-credentials",
+    title: "Bitbucket Data Center credentials",
+    to: "/settings/source-control",
+    searchTerms: [
+      "bitbucket data center server self-hosted host url http access token credentials sign in",
+    ],
+    environmentOnly: true,
+    scope: "environment-defaults",
+  },
+  {
     id: "source-control-writing-style",
     title: "Source control writing style",
     to: "/settings/source-control",

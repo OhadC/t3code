@@ -158,8 +158,9 @@ await Effect.runPromise(
               ForgejoCli.layer,
               AzureDevOpsCli.layer,
               // No saved credentials here; Bitbucket falls back to T3CODE_BITBUCKET_* variables.
-              BitbucketApi.layer.pipe(Layer.provide(ServerSettings.layerTest())),
-              BitbucketServerApi.layer,
+              Layer.mergeAll(BitbucketApi.layer, BitbucketServerApi.layer).pipe(
+                Layer.provide(ServerSettings.layerTest()),
+              ),
             ),
           ),
           Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),

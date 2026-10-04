@@ -80,3 +80,30 @@ it.effect("wraps API failures with the operation while keeping the cause", () =>
     assert.strictEqual(error.cause, cause);
   }),
 );
+
+it.effect("shows why a configured token was refused instead of the setup hint", () =>
+  Effect.gen(function* () {
+    const refused = {
+      status: "unauthenticated" as const,
+      account: Option.none(),
+      host: Option.some("bitbucket.example.com"),
+      detail: Option.some("bitbucket.example.com rejected the configured token (HTTP 401)."),
+    };
+    const unconfigured = {
+      status: "unauthenticated" as const,
+      account: Option.none(),
+      host: Option.none(),
+      detail: Option.some(BitbucketServerApi.CONFIGURATION_HINT),
+    };
+    const probe = (auth: typeof refused | typeof unconfigured) =>
+      BitbucketServerSourceControlProvider.makeDiscovery.pipe(
+        Effect.flatMap((spec) => spec.probeAuth),
+        Effect.provide(
+          Layer.mock(BitbucketServerApi.BitbucketServerApi)({ probeAuth: Effect.succeed(auth) }),
+        ),
+      );
+
+    assert.deepStrictEqual(yield* probe(refused), { ...refused, status: "unknown" });
+    assert.deepStrictEqual(yield* probe(unconfigured), unconfigured);
+  }),
+);

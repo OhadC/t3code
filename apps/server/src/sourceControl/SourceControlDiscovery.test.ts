@@ -694,7 +694,7 @@ Logged in to gitlab.com as gitlab-user
           auth: "unauthenticated",
           account: Option.none(),
           detail: Option.some(
-            "Set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server (use an HTTP access token with repository read/write and project read scopes).",
+            "Add a Bitbucket Data Center host and token in Settings → Source Control, or set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server.",
           ),
         },
       ],

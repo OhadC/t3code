@@ -1,4 +1,4 @@
-import type { BitbucketSettings, EnvironmentId } from "@t3tools/contracts";
+import type { BitbucketServerSettings, BitbucketSettings, EnvironmentId } from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -208,6 +208,122 @@ export function BitbucketCredentialsSettings({
                 variant="outline"
                 disabled={saving}
                 onClick={() => void save({ accessToken: "", email: "", apiToken: "" })}
+              >
+                Remove
+              </Button>
+            ) : null}
+            <Button type="submit" size="xs" disabled={!canSave || saving}>
+              Save
+            </Button>
+          </div>
+        </div>
+      </fieldset>
+    </form>
+  );
+}
+
+/**
+ * Bitbucket Data Center host and HTTP access token for one environment. The token is
+ * write-only, like the Bitbucket Cloud tokens above.
+ */
+export function BitbucketServerCredentialsSettings({
+  environmentId,
+  onSaved,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly onSaved: () => void;
+}) {
+  const saved = useEnvironmentSettings(environmentId, (settings) => settings.bitbucketServer);
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "save Bitbucket Data Center credentials",
+  });
+  const [urlDraft, setUrlDraft] = useState<string | null>(null);
+  const [token, setToken] = useState("");
+  const [saving, setSaving] = useState(false);
+  const url = (urlDraft ?? saved.url).trim();
+  const newToken = token.trim();
+  const isSaved = saved.url.length > 0 || saved.token.length > 0;
+  const canSave =
+    /^https?:\/\/\S+$/iu.test(url) &&
+    (newToken !== "" || (saved.token.length > 0 && url !== saved.url));
+
+  const save = async (next: BitbucketServerSettings) => {
+    setSaving(true);
+    try {
+      const result = await updateSettings({
+        environmentId,
+        input: { patch: { bitbucketServer: next } },
+      });
+      if (result._tag === "Success") {
+        setToken("");
+        setUrlDraft(null);
+        onSaved();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form
+      className="grid gap-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        // Resending the saved token's redacted value keeps it.
+        if (canSave) void save({ url, token: newToken || saved.token });
+      }}
+    >
+      <fieldset disabled={saving} className="contents">
+        <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
+          Use an HTTP access token with repository write and project read permissions. Include the
+          context path in the URL if Bitbucket is served under one.{" "}
+          <InlineButton
+            render={
+              <a
+                href="https://confluence.atlassian.com/bitbucketserver/http-access-tokens-939515499.html"
+                target="_blank"
+                rel="noreferrer noopener"
+              />
+            }
+          >
+            Learn more
+            <ExternalLinkIcon aria-hidden className="size-3" />
+          </InlineButton>
+        </p>
+        <div className="grid gap-1.5">
+          <Label htmlFor={`bitbucket-server-url-${environmentId}`}>Host URL</Label>
+          <Input
+            id={`bitbucket-server-url-${environmentId}`}
+            type="url"
+            autoComplete="off"
+            size="sm"
+            placeholder="https://bitbucket.example.com"
+            value={urlDraft ?? saved.url}
+            onChange={(event) => setUrlDraft(event.target.value)}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor={`bitbucket-server-token-${environmentId}`}>HTTP access token</Label>
+          <TokenInput
+            id={`bitbucket-server-token-${environmentId}`}
+            isSaved={saved.token.length > 0}
+            draft={token}
+            onDraftChange={setToken}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">
+            {saved.token.length > 0
+              ? null
+              : "Without a saved host and token, the server falls back to its T3CODE_BITBUCKET_SERVER_* environment variables."}
+          </p>
+          <div className="flex shrink-0 gap-2">
+            {isSaved ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={saving}
+                onClick={() => void save({ url: "", token: "" })}
               >
                 Remove
               </Button>

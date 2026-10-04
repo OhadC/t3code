@@ -1566,6 +1566,74 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 
+  it.effect(
+    "keeps the Bitbucket Data Center token in the secret store and the host in settings",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        const saved = yield* serverSettings.updateSettings({
+          bitbucketServer: { url: "https://dc.example.com/context", token: "dc-token" },
+        });
+        assert.deepEqual(saved.bitbucketServer, {
+          url: "https://dc.example.com/context",
+          token: "dc-token",
+        });
+
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        assert.notInclude(raw, "dc-token");
+        assert.include(raw, "https://dc.example.com/context");
+
+        const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).bitbucketServer;
+        assert.equal(forClient.url, "https://dc.example.com/context");
+        assert.notInclude(forClient.token, "dc-token");
+        assert.isAbove(forClient.token.length, 0);
+
+        // Echoing the redacted token back, or omitting it, keeps the saved one.
+        yield* serverSettings.updateSettings({ bitbucketServer: forClient });
+        yield* serverSettings.updateSettings({
+          bitbucketServer: { url: "https://other.example.com" },
+        });
+        assert.deepEqual((yield* serverSettings.getSettings).bitbucketServer, {
+          url: "https://other.example.com",
+          token: "dc-token",
+        });
+
+        const cleared = yield* serverSettings.updateSettings({ bitbucketServer: { token: "" } });
+        assert.equal(cleared.bitbucketServer.token, "");
+        assert.isTrue(Option.isNone(yield* secrets.get("bitbucket-server-token")));
+      }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("moves a hand-edited Bitbucket Data Center token into the secret store on load", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"bitbucketServer":{"url":"https://dc.example.com","token":"hand-edited-token"}}',
+      );
+
+      const loaded = yield* serverSettings.getSettings;
+
+      assert.equal(loaded.bitbucketServer.token, "hand-edited-token");
+      assert.notInclude(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        "hand-edited-token",
+      );
+      const stored = yield* secrets.get("bitbucket-server-token");
+      assert.equal(
+        Option.isSome(stored) ? new TextDecoder().decode(stored.value) : null,
+        "hand-edited-token",
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
   it.effect("removes a Bitbucket secret once its token is cleared by hand in settings.json", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

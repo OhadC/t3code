@@ -1297,9 +1297,9 @@ const PROVIDER_REQUIREMENT: Partial<
   },
   "bitbucket-server": {
     missing:
-      "Bitbucket Data Center needs a host and token on the server. Set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN.",
+      "Bitbucket Data Center needs a host and token on the server. Add them in Settings → Source Control.",
     unauthenticated:
-      "Bitbucket Data Center rejected the configured token. Check T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN.",
+      "Bitbucket Data Center rejected the configured token. Check it in Settings → Source Control.",
   },
 };
 

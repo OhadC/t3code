@@ -74,16 +74,21 @@ export T3CODE_BITBUCKET_API_TOKEN="your-token"
 
 Self-hosted Bitbucket (Data Center or Server) is configured separately from Bitbucket Cloud, and
 both can be set up at once. Create an HTTP access token with repository read and write and project
-read permissions, then set the host URL and token in the server's environment:
+read permissions, then open **Settings → Source Control**, expand **Bitbucket Data Center**, enter
+the host URL and token, and choose **Save**. The change applies right away. Include the context path
+if your host serves Bitbucket under one, such as `https://example.com/bitbucket`. As with Bitbucket
+Cloud, the saved token can't be viewed again; enter a new one to replace it, or choose **Remove**.
+
+If no host and token are saved, T3 Code falls back to these variables in the server's environment.
+Restart the server after changing them:
 
 ```bash
 export T3CODE_BITBUCKET_SERVER_URL="https://bitbucket.example.com"
 export T3CODE_BITBUCKET_SERVER_TOKEN="your-http-access-token"
 ```
 
-Include the context path if your host serves Bitbucket under one, such as
-`https://example.com/bitbucket`. Restart the server after changing these variables. Repositories are
-addressed as `PROJECTKEY/repo-slug`; personal repositories use `~username` as the project key.
+Repositories are addressed as `PROJECTKEY/repo-slug`; personal repositories use `~username` as the
+project key.
 
 If the host uses a certificate from your organization's own certificate authority, the desktop app
 trusts the operating system certificate store automatically. For `npx t3`, start the server with

@@ -56,7 +56,10 @@ import {
   JujutsuIcon,
   type Icon,
 } from "../Icons";
-import { BitbucketCredentialsSettings } from "./BitbucketCredentialsSettings";
+import {
+  BitbucketCredentialsSettings,
+  BitbucketServerCredentialsSettings,
+} from "./BitbucketCredentialsSettings";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
 import {
@@ -284,7 +287,9 @@ function DiscoveryItemRow({
     if (
       (item.kind === "git" && searchTargetId === searchableSetting("git-fetch-interval").id) ||
       (item.kind === "bitbucket" &&
-        searchTargetId === searchableSetting("bitbucket-credentials").id)
+        searchTargetId === searchableSetting("bitbucket-credentials").id) ||
+      (item.kind === "bitbucket-server" &&
+        searchTargetId === searchableSetting("bitbucket-server-credentials").id)
     ) {
       setIsExpanded(true);
     }
@@ -599,6 +604,14 @@ export function SourceControlSettingsPanel() {
                     <SettingsSearchTarget id={searchableSetting("bitbucket-credentials").id}>
                       <BitbucketCredentialsSettings
                         // Drafts belong to one environment; switching must not carry them over.
+                        key={environmentId}
+                        environmentId={environmentId}
+                        onSaved={handleScan}
+                      />
+                    </SettingsSearchTarget>
+                  ) : item.kind === "bitbucket-server" ? (
+                    <SettingsSearchTarget id={searchableSetting("bitbucket-server-credentials").id}>
+                      <BitbucketServerCredentialsSettings
                         key={environmentId}
                         environmentId={environmentId}
                         onSaved={handleScan}

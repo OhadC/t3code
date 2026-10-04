@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { SourceControlProviderError } from "@t3tools/contracts";
 
 import * as BitbucketServerApi from "./BitbucketServerApi.ts";
@@ -164,7 +165,15 @@ export const makeDiscovery = Effect.gen(function* () {
     type: "api",
     kind: "bitbucket-server",
     label: "Bitbucket Data Center",
-    installHint: BitbucketServerApi.CONFIGURATION_HINT,
-    probeAuth: bitbucket.probeAuth,
+    installHint: "Add a Bitbucket Data Center host and token in Settings → Source Control.",
+    // Settings show only the setup hint for an unauthenticated API integration, so a token the
+    // host refused (a host is only reported once one is configured) reports as unverified there.
+    probeAuth: bitbucket.probeAuth.pipe(
+      Effect.map((auth) =>
+        auth.status === "unauthenticated" && Option.isSome(auth.host)
+          ? { ...auth, status: "unknown" as const }
+          : auth,
+      ),
+    ),
   } satisfies SourceControlApiDiscoverySpec;
 });

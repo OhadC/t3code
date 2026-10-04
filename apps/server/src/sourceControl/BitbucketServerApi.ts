@@ -8,8 +8,10 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
+  DEFAULT_SERVER_SETTINGS,
   NonNegativeInt,
   TrimmedNonEmptyString,
+  type BitbucketServerSettings,
   type SourceControlProviderAuth,
   type SourceControlRepositoryCloneUrls,
 } from "@t3tools/contracts";
@@ -32,12 +34,13 @@ import {
 } from "./bitbucketServerPullRequests.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 import * as SourceControlProvider from "./SourceControlProvider.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { retryAtFromHeader } from "./SourceControlRateLimit.ts";
 
 export const CONFIGURATION_HINT =
-  "Set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server (use an HTTP access token with repository read/write and project read scopes).";
+  "Add a Bitbucket Data Center host and token in Settings → Source Control, or set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server.";
 
 const API_ROOT = "/rest/api/1.0";
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -83,7 +86,7 @@ export class BitbucketServerHostMismatchError extends Schema.TaggedError<Bitbuck
   },
 ) {
   get detail(): string {
-    return `The remote is on ${this.remoteHost} but T3CODE_BITBUCKET_SERVER_URL points at ${this.configuredHost}.`;
+    return `The remote is on ${this.remoteHost} but the configured Bitbucket Data Center host is ${this.configuredHost}.`;
   }
 
   override get message(): string {
@@ -375,15 +378,21 @@ function nonEmpty(value: string | undefined): Option.Option<string> {
   return trimmed === undefined || trimmed.length === 0 ? Option.none() : Option.some(trimmed);
 }
 
-function connectionFromConfig(
-  config: Config.Success<typeof BitbucketServerEnvConfig>,
-): Option.Option<BitbucketServerConnection> {
-  const baseUrl = Option.flatMap(config.baseUrl, nonEmpty);
-  const token = Option.flatMap(config.token, nonEmpty);
-  if (Option.isNone(baseUrl) || Option.isNone(token)) return Option.none();
+/**
+ * Visible ASCII only. A value the HTTP stack rejects makes it throw an error quoting the whole
+ * header, and that error travels to clients as a cause, so an unusable token is treated as unset.
+ */
+const HEADER_SAFE = /^[\x21-\x7e]+$/u;
+
+function connectionFrom(input: {
+  readonly url: string;
+  readonly token: string;
+}): Option.Option<BitbucketServerConnection> {
+  const token = input.token.trim();
+  if (!HEADER_SAFE.test(token)) return Option.none();
   let url: URL;
   try {
-    url = new URL(baseUrl.value);
+    url = new URL(input.url.trim());
   } catch {
     return Option.none();
   }
@@ -391,8 +400,24 @@ function connectionFromConfig(
     baseUrl: `${url.origin}${url.pathname.replace(/\/+$/u, "")}`,
     origin: url.origin,
     hostname: url.hostname.toLowerCase(),
-    token: token.value,
+    token,
   });
+}
+
+/**
+ * A host and token saved in settings win over the `T3CODE_BITBUCKET_SERVER_*` environment
+ * variables, which stay as a fallback. Each source supplies both or neither.
+ */
+function resolveConnection(
+  settings: BitbucketServerSettings,
+  env: Config.Success<typeof BitbucketServerEnvConfig>,
+): Option.Option<BitbucketServerConnection> {
+  return Option.orElse(connectionFrom(settings), () =>
+    connectionFrom({
+      url: Option.getOrElse(env.baseUrl, () => ""),
+      token: Option.getOrElse(env.token, () => ""),
+    }),
+  );
 }
 
 /** `PROJECTKEY/repo-slug`, the last two segments of whatever spelling arrived. */
@@ -533,19 +558,33 @@ function hostErrorMessage(body: string): string | null {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const config = yield* BitbucketServerEnvConfig;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const fileSystem = yield* FileSystem.FileSystem;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
-  const connection = connectionFromConfig(config);
+
+  // Read on every request so a host and token saved in settings apply without a restart.
+  const currentConnection = serverSettings.getSettings.pipe(
+    Effect.map((settings) => resolveConnection(settings.bitbucketServer, config)),
+    Effect.catch((error) =>
+      // No cause: a settings decode error can quote a hand-edited token.
+      Effect.logWarning("failed to read Bitbucket Data Center credentials from settings", {
+        operation: error.operation,
+      }).pipe(Effect.as(resolveConnection(DEFAULT_SERVER_SETTINGS.bitbucketServer, config))),
+    ),
+  );
 
   const withConnection = <A, E, R>(
     use: (connection: BitbucketServerConnection) => Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E | BitbucketServerNotConfiguredError, R> =>
-    Option.match(connection, {
-      onNone: () => Effect.fail(new BitbucketServerNotConfiguredError()),
-      onSome: use,
-    });
+    currentConnection.pipe(
+      Effect.flatMap(Effect.fromOption),
+      Effect.catchTag("NoSuchElementError", () =>
+        Effect.fail(new BitbucketServerNotConfiguredError()),
+      ),
+      Effect.flatMap(use),
+    );
 
   const apiUrl = (connection: BitbucketServerConnection, path: string) =>
     `${connection.baseUrl}${API_ROOT}${path}`;
@@ -762,61 +801,67 @@ export const make = Effect.gen(function* () {
       );
     });
 
-  const probeAuth: BitbucketServerApi["Service"]["probeAuth"] = Option.match(connection, {
-    onNone: () =>
-      Effect.succeed<SourceControlProviderAuth>({
-        status: "unauthenticated",
-        account: Option.none(),
-        host: Option.none(),
-        detail: Option.some(CONFIGURATION_HINT),
-      }),
-    onSome: (connection) =>
-      send(
-        "probeAuth",
-        connection,
-        HttpClientRequest.get(apiUrl(connection, "/projects"), {
-          urlParams: { limit: "1" },
-        }).pipe(HttpClientRequest.acceptJson),
-      ).pipe(
-        Effect.map((response): SourceControlProviderAuth => {
-          if (response.status >= 200 && response.status < 300) {
-            const rawAccount = response.headers["x-ausername"];
-            let account = rawAccount;
-            try {
-              account = rawAccount === undefined ? undefined : decodeURIComponent(rawAccount);
-            } catch {}
-            return {
-              status: "authenticated",
-              account: nonEmpty(account),
-              host: Option.some(connection.hostname),
-              detail: Option.none(),
-            };
-          }
-          if (response.status === 401 || response.status === 403) {
-            return {
-              status: "unauthenticated",
-              account: Option.none(),
-              host: Option.some(connection.hostname),
-              detail: Option.some(
-                `${connection.hostname} rejected T3CODE_BITBUCKET_SERVER_TOKEN (HTTP ${response.status}).`,
-              ),
-            };
-          }
+  const probeConnection = (connection: BitbucketServerConnection) =>
+    send(
+      "probeAuth",
+      connection,
+      HttpClientRequest.get(apiUrl(connection, "/projects"), {
+        urlParams: { limit: "1" },
+      }).pipe(HttpClientRequest.acceptJson),
+    ).pipe(
+      Effect.map((response): SourceControlProviderAuth => {
+        if (response.status >= 200 && response.status < 300) {
+          const rawAccount = response.headers["x-ausername"];
+          let account = rawAccount;
+          try {
+            account = rawAccount === undefined ? undefined : decodeURIComponent(rawAccount);
+          } catch {}
           return {
-            status: "unknown",
+            status: "authenticated",
+            account: nonEmpty(account),
+            host: Option.some(connection.hostname),
+            detail: Option.none(),
+          };
+        }
+        if (response.status === 401 || response.status === 403) {
+          return {
+            status: "unauthenticated",
             account: Option.none(),
             host: Option.some(connection.hostname),
-            detail: Option.some(`${connection.hostname} returned HTTP ${response.status}.`),
+            detail: Option.some(
+              `${connection.hostname} rejected the configured token (HTTP ${response.status}).`,
+            ),
           };
-        }),
-        Effect.orElseSucceed((): SourceControlProviderAuth => ({
+        }
+        return {
           status: "unknown",
           account: Option.none(),
           host: Option.some(connection.hostname),
-          detail: Option.some(`${connection.hostname} could not be reached.`),
-        })),
-      ),
-  });
+          detail: Option.some(`${connection.hostname} returned HTTP ${response.status}.`),
+        };
+      }),
+      Effect.orElseSucceed((): SourceControlProviderAuth => ({
+        status: "unknown",
+        account: Option.none(),
+        host: Option.some(connection.hostname),
+        detail: Option.some(`${connection.hostname} could not be reached.`),
+      })),
+    );
+
+  const probeAuth: BitbucketServerApi["Service"]["probeAuth"] = currentConnection.pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.succeed<SourceControlProviderAuth>({
+            status: "unauthenticated",
+            account: Option.none(),
+            host: Option.none(),
+            detail: Option.some(CONFIGURATION_HINT),
+          }),
+        onSome: probeConnection,
+      }),
+    ),
+  );
 
   return BitbucketServerApi.of({
     probeAuth,
