@@ -521,7 +521,7 @@ export function nativeMarkdownWithPreservedSoftBreaks(node: MarkdownNode): Markd
 }
 
 const WINDOWS_DESTINATION_PATTERN = /\](?:\(|:)\s*<?((?:[A-Za-z]:|\\\\)(?:\\.|[^\s()<>\\])*)/g;
-const WINDOWS_PROSE_PATH_PATTERN = /(^|[^\w\\])([A-Za-z]:(?:\\\S|[^\s()<>\\`*])*)/g;
+const WINDOWS_PROSE_PATH_PATTERN = /(^|[^\w\\])([A-Za-z]:(?:\\\S|[^\s<>\\`*])*)/g;
 const MARKDOWN_ESCAPE_PATTERN = /\\([!-/:-@[-`{-~])/g;
 
 /**
@@ -547,6 +547,7 @@ export function nativeMarkdownWithAuthoredWindowsPaths(
   }
   if (authoredByParsed.size === 0) return node;
   const restore = (current: MarkdownNode): MarkdownNode => {
+    if (current.type === "code_inline" || current.type === "code_block") return current;
     const href = current.href && authoredByParsed.get(current.href);
     const content =
       current.type === "text" &&

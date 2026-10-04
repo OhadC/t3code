@@ -654,7 +654,7 @@ function keepWindowsPathDestination(this: DestinationCompileContext, token: unkn
     node.url = isWindowsAbsolutePath(authored) && !authored.includes("&") ? authored : decoded;
 }
 
-const WINDOWS_DRIVE_PATH_TAIL_REGEX = /(?:^|\W)[A-Za-z]:(?:\\\S*)?$/;
+const WINDOWS_DRIVE_PATH_TAIL_REGEX = /(?:^|\W)[A-Za-z]:(?:[\\/]\S*)?$/;
 
 function keepWindowsPathEscape(this: { readonly stack: ReadonlyArray<Nodes | Parent> }) {
   const parent = this.stack.at(-1);

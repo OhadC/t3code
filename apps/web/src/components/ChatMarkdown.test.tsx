@@ -769,11 +769,13 @@ describe("ChatMarkdown Windows paths", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown
         cwd="/tmp/project"
-        text={String.raw`Saved to C:\Users\me\.t3\_build\shot.png and (C:\.scratch). Keep \*this\* escaped.`}
+        text={String.raw`Saved to C:\Users\me\.t3\_build\shot.png and (C:\.scratch) and C:/work\.config. Keep \*this\* escaped.`}
       />,
     );
 
-    expect(html).toContain(String.raw`Saved to C:\Users\me\.t3\_build\shot.png and (C:\.scratch).`);
+    expect(html).toContain(
+      String.raw`Saved to C:\Users\me\.t3\_build\shot.png and (C:\.scratch) and C:/work\.config.`,
+    );
     expect(html).toContain("Keep *this* escaped.");
   });
 });
