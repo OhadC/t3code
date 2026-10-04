@@ -73,6 +73,9 @@ export function bitbucketServerProviderFailure(
       ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
     };
   }
+  if (error._tag === "BitbucketServerResponseError" && error.status === 404) {
+    return { reason: "not-found" };
+  }
   return { reason: "failed" };
 }
 
@@ -162,6 +165,17 @@ export const make = Effect.gen(function* () {
           })),
         ),
 
+    getChangeRequestChecks: (input) =>
+      api.getPullRequest({ repository: input.repository, number: input.number }).pipe(
+        Effect.flatMap((pullRequest) =>
+          (pullRequest.headCommit === null
+            ? Effect.succeed([])
+            : api.listChecks({ commit: pullRequest.headCommit })
+          ).pipe(Effect.map((checks) => ({ state: pullRequest.state, checks }))),
+        ),
+        Effect.mapError(fail("getChangeRequestChecks")),
+      ),
+
     getChangeRequest: (input) => {
       const target = { repository: input.repository, number: input.number };
       return api.getPullRequest(target).pipe(
@@ -185,6 +199,7 @@ export const make = Effect.gen(function* () {
             Effect.map(
               ([mergeability, checks, changedFiles, canWrite]): ProviderChangeRequestDetail => ({
                 ...toChangeRequest(pullRequest),
+                ...(pullRequest.headCommit === null ? {} : { headSha: pullRequest.headCommit }),
                 mergeability,
                 changedFiles,
                 body: pullRequest.body,

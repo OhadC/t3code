@@ -63,6 +63,7 @@ describe("getChangeRequest", () => {
         body: "Created by the adapter.",
         reviewers: [{ login: "ohcohen" }],
         checks: [{ name: "CI", status: "success" }],
+        headSha: "5e8770617aea7591ffda6a0fbe82149cf9a739a8",
         viewerPermissions: { actions: ["close", "reopen"] },
       });
       // Build statuses live on the head commit, which is the one the detail asks about.
@@ -105,6 +106,52 @@ describe("getChangeRequest", () => {
   });
 });
 
+describe("getChangeRequestChecks", () => {
+  const input = {
+    cwd: "/repo",
+    repository: "~OHCOHEN/testing-repo",
+    host: "bitbucket.example.com",
+    number: 2,
+  };
+
+  it.effect("reads the head commit's build statuses alongside the state", () => {
+    const listChecks = vi.fn<
+      BitbucketServerPullRequestApi.BitbucketServerPullRequestApi["Service"]["listChecks"]
+    >(() =>
+      Effect.succeed([{ name: "CI", status: "failure" as const, description: null, url: null }]),
+    );
+    const api = Layer.mock(BitbucketServerPullRequestApi.BitbucketServerPullRequestApi)({
+      getPullRequest: () => Effect.succeed({ ...pullRequest, state: "merged" as const }),
+      listChecks,
+    });
+
+    return Effect.gen(function* () {
+      const read = (yield* make).getChangeRequestChecks;
+      if (read === undefined) return yield* Effect.die("checks read missing");
+      expect(yield* read(input)).toEqual({
+        state: "merged",
+        checks: [{ name: "CI", status: "failure", description: null, url: null }],
+      });
+      assert.strictEqual(
+        listChecks.mock.calls[0]?.[0].commit,
+        "5e8770617aea7591ffda6a0fbe82149cf9a739a8",
+      );
+    }).pipe(Effect.provide(api));
+  });
+
+  it.effect("has no checks to read without a head commit", () => {
+    const api = Layer.mock(BitbucketServerPullRequestApi.BitbucketServerPullRequestApi)({
+      getPullRequest: () => Effect.succeed({ ...pullRequest, headCommit: null }),
+    });
+
+    return Effect.gen(function* () {
+      const read = (yield* make).getChangeRequestChecks;
+      if (read === undefined) return yield* Effect.die("checks read missing");
+      expect(yield* read(input)).toEqual({ state: "open", checks: [] });
+    }).pipe(Effect.provide(api));
+  });
+});
+
 describe("bitbucketServerProviderFailure", () => {
   const responseError = (status: number, retryAt?: number) =>
     new BitbucketServerApi.BitbucketServerResponseError({
@@ -135,6 +182,10 @@ describe("bitbucketServerProviderFailure", () => {
       reason: "rate-limited",
       retryAt: 1_000,
     });
+  });
+
+  it("reports a pull request the host does not have as not found", () => {
+    expect(bitbucketServerProviderFailure(responseError(404)).reason).toBe("not-found");
   });
 
   it("treats anything else as one failed request", () => {
