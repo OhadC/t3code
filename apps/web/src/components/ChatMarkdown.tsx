@@ -88,6 +88,7 @@ import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import remarkGfm from "remark-gfm";
+import type { Nodes, Parent } from "mdast";
 import type { Processor } from "unified";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
@@ -493,7 +494,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
 
 const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
-  remarkKeepWindowsPathDestinations,
+  remarkKeepWindowsPaths,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkCodexDirectives,
@@ -503,7 +504,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
 
 const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGfm,
-  remarkKeepWindowsPathDestinations,
+  remarkKeepWindowsPaths,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkCodexDirectives,
@@ -653,17 +654,30 @@ function keepWindowsPathDestination(this: DestinationCompileContext, token: unkn
     node.url = isWindowsAbsolutePath(authored) && !authored.includes("&") ? authored : decoded;
 }
 
+const WINDOWS_DRIVE_PATH_TAIL_REGEX = /(?:^|\W)[A-Za-z]:(?:\\\S*)?$/;
+
+function keepWindowsPathEscape(this: { readonly stack: ReadonlyArray<Nodes | Parent> }) {
+  const parent = this.stack.at(-1);
+  const text = parent && "children" in parent ? parent.children.at(-1) : undefined;
+  if (text?.type !== "text") return;
+  const before = text.value.slice(0, -1);
+  if (WINDOWS_DRIVE_PATH_TAIL_REGEX.test(before)) {
+    text.value = `${before}\\${text.value.slice(-1)}`;
+  }
+}
+
 /**
- * CommonMark reads the `\.` in `C:\me\.t3\shot.png` as an escape, even in a link
- * destination. Every backslash in a Windows path is a separator, so link, image, and
- * definition destinations that are Windows paths keep the text as written.
+ * CommonMark reads the `\.` in `C:\me\.t3\shot.png` as an escape. Every backslash in a
+ * Windows path is a separator, so link, image, and definition destinations that are
+ * Windows paths keep the text as written, and so do drive paths in prose.
  */
-function remarkKeepWindowsPathDestinations(this: Processor) {
+function remarkKeepWindowsPaths(this: Processor) {
   const data = this.data();
   (data.fromMarkdownExtensions ??= []).push({
     exit: {
       resourceDestinationString: keepWindowsPathDestination,
       definitionDestinationString: keepWindowsPathDestination,
+      characterEscape: keepWindowsPathEscape,
     },
   });
 }
