@@ -114,6 +114,23 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
     });
   });
 
+  it("does not reuse SSH ports for HTTPS provider URLs", () => {
+    expect(
+      detectSourceControlProviderFromRemoteUrl("ssh://git@gitlab.example.test:24/group/repo.git"),
+    ).toEqual({
+      kind: "gitlab",
+      name: "GitLab Self-Hosted",
+      baseUrl: "https://gitlab.example.test",
+    });
+    expect(
+      detectSourceControlProviderFromRemoteUrl("ssh://git@code.example.test:24/team/project.git"),
+    ).toEqual({
+      kind: "unknown",
+      name: "code.example.test",
+      baseUrl: "https://code.example.test",
+    });
+  });
+
   it("matches self-hosted providers by complete DNS labels", () => {
     expect(
       detectSourceControlProviderFromRemoteUrl("https://github.example.com/owner/repo.git")?.kind,
@@ -141,7 +158,7 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
     ).toEqual({
       kind: "bitbucket-server",
       name: "Bitbucket Data Center",
-      baseUrl: "https://bitbucket.example.com:7999",
+      baseUrl: "https://bitbucket.example.com",
     });
     expect(
       detectSourceControlProviderFromRemoteUrl("git@bitbucket.cognyte.local:~ohcohen/repo.git")

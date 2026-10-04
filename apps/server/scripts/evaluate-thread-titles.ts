@@ -29,6 +29,7 @@ import * as ForgejoCli from "../src/sourceControl/ForgejoCli.ts";
 import * as AzureDevOpsCli from "../src/sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../src/sourceControl/BitbucketApi.ts";
 import * as BitbucketServerApi from "../src/sourceControl/BitbucketServerApi.ts";
+import * as ServerSettings from "../src/serverSettings.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import * as VcsDriverRegistry from "../src/vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "../src/vcs/VcsProjectConfig.ts";
@@ -156,7 +157,8 @@ await Effect.runPromise(
               GitLabCli.layer,
               ForgejoCli.layer,
               AzureDevOpsCli.layer,
-              BitbucketApi.layer,
+              // No saved credentials here; Bitbucket falls back to T3CODE_BITBUCKET_* variables.
+              BitbucketApi.layer.pipe(Layer.provide(ServerSettings.layerTest())),
               BitbucketServerApi.layer,
             ),
           ),

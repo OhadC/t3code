@@ -93,6 +93,8 @@ const RawCheckSchema = Schema.Struct({
   workflowName: Schema.optional(Schema.NullOr(Schema.String)),
   startedAt: Schema.optional(Schema.NullOr(Schema.String)),
   completedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Branch protection requires this check; read by the detail query on github.com only. */
+  isRequired: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 
 const RawListItemSchema = Schema.Struct({
@@ -706,8 +708,15 @@ export const PULL_REQUEST_LIST_JSON_FIELDS =
 
 export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,isCrossRepository,headRepositoryOwner,headRefOid,autoMergeRequest`;
 
-/** Pull refs let the comparison share the detail read without first resolving a fork branch. */
-export const PULL_REQUEST_CORE_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $headRef: String!) {
+/**
+ * Pull refs let the comparison share the detail read without first resolving a fork branch.
+ * `isRequired` is asked for on github.com only: an older Enterprise server may not know it, and
+ * an unknown field fails the whole read.
+ */
+export const pullRequestCoreGraphQlQuery = (host: string) => {
+  const required =
+    host.toLowerCase() === "github.com" ? " isRequired(pullRequestNumber: $number)" : "";
+  return `query($owner: String!, $name: String!, $number: Int!, $headRef: String!) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerPermission
     pullRequest(number: $number) {
@@ -727,9 +736,9 @@ export const PULL_REQUEST_CORE_GRAPHQL_QUERY = `query($owner: String!, $name: St
         nodes { commit { statusCheckRollup { contexts(first: 100) {
           nodes {
             __typename
-            ... on StatusContext { context state targetUrl createdAt description }
+            ... on StatusContext { context state targetUrl createdAt description${required} }
             ... on CheckRun {
-              name status conclusion startedAt completedAt detailsUrl
+              name status conclusion startedAt completedAt detailsUrl${required}
               checkSuite { workflowRun { workflow { name } } }
             }
           }
@@ -739,6 +748,7 @@ export const PULL_REQUEST_CORE_GRAPHQL_QUERY = `query($owner: String!, $name: St
     }
   }
 }`;
+};
 
 export const PULL_REQUEST_PREVIEW_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -1468,6 +1478,7 @@ function toCheckEntries(
           status: toCheckStatus(check),
           description: trimmed(check.description),
           url: trimmed(check.detailsUrl) ?? trimmed(check.targetUrl),
+          ...(typeof check.isRequired === "boolean" ? { required: check.isRequired } : {}),
         },
         workflowName: trimmed(check.workflowName),
         at: realTimestamp(check.completedAt) ?? realTimestamp(check.startedAt),
@@ -1847,6 +1858,135 @@ export function decodePullRequestStatsJson(
   return Result.succeed(stats);
 }
 
+/**
+ * The fields a linked thread keeps current, for many pull requests in one aliased read. Same
+ * shape as the search row where the two overlap: the checks arrive as GitHub's one-word rollup
+ * rather than the whole check list `gh pr view` hands back, which is what keeps a batch cheap.
+ */
+const STACK_MEMBERSHIP_SELECTION = "stack { number size baseRefName } stackEntry { position }";
+
+const PULL_REQUEST_SUMMARY_SELECTION =
+  "number title url state isDraft mergeable reviewDecision additions deletions changedFiles " +
+  "updatedAt mergedAt closedAt headRefName baseRefName " +
+  "author { __typename login avatarUrl ... on User { name } } " +
+  "latestReviews(first: 20) { nodes { state author { login } } } " +
+  "commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }";
+
+/**
+ * Summaries for pull requests anywhere on one host, one aliased lookup each. Checked and written
+ * into the document the way `buildPullRequestStatsGraphQlQuery` does, so null means "do not send".
+ */
+export function buildPullRequestSummariesGraphQlQuery(
+  changeRequests: ReadonlyArray<{ readonly repository: string; readonly number: number }>,
+  includeStacks = false,
+): string | null {
+  if (changeRequests.length === 0) return null;
+  const selections: string[] = [];
+  for (const [index, changeRequest] of changeRequests.entries()) {
+    const [owner, name, ...rest] = changeRequest.repository.trim().split("/");
+    if (rest.length > 0 || owner === undefined || name === undefined) return null;
+    if (!REPOSITORY_PART.test(owner) || !REPOSITORY_PART.test(name)) return null;
+    if (!Number.isSafeInteger(changeRequest.number) || changeRequest.number <= 0) return null;
+    selections.push(
+      `  s${index}: repository(owner: "${owner}", name: "${name}") { pullRequest(number: ${changeRequest.number}) { ${PULL_REQUEST_SUMMARY_SELECTION}${includeStacks ? ` ${STACK_MEMBERSHIP_SELECTION}` : ""} } }`,
+    );
+  }
+  return `query PullRequestSummaries {\n${selections.join("\n")}\n}`;
+}
+
+const RawSummarySchema = Schema.Struct({
+  ...RawSearchItemSchema.fields,
+  changedFiles: Schema.optional(Schema.NullOr(Schema.Int)),
+  additions: Schema.optional(Schema.NullOr(Schema.Int)),
+  deletions: Schema.optional(Schema.NullOr(Schema.Int)),
+  closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  createdAt: Schema.optional(Schema.String),
+});
+const decodeSummaries = decodeJsonResult(
+  Schema.Struct({
+    data: Schema.optional(
+      Schema.NullOr(
+        Schema.Record(
+          Schema.String,
+          Schema.NullOr(Schema.Struct({ pullRequest: Schema.optional(Schema.Unknown) })),
+        ),
+      ),
+    ),
+  }),
+);
+const decodeSummaryEntry = Schema.decodeUnknownExit(RawSummarySchema);
+
+export interface GitHubPullRequestSummary {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
+  readonly closedAt: string | null;
+  readonly mergedAt: string | null;
+  readonly updatedAt: string;
+  readonly author: PullRequestActor | null;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly reviewDecision: PullRequestReviewDecision | null;
+  readonly checksState: PullRequestChecksState | null;
+  readonly mergeability: PullRequestMergeability;
+  /** Null when GitHub says the pull request is in no stack; absent when the read did not ask. */
+  readonly stack?: PullRequestStackMembership | null;
+}
+
+/**
+ * Summaries by the position they were asked in. A pull request GitHub answered nothing for, or
+ * one whose fields no longer decode, is absent rather than failing the rest of the batch.
+ */
+export function decodePullRequestSummariesJson(
+  raw: string,
+): Result.Result<ReadonlyMap<number, GitHubPullRequestSummary>, DecodeFailure> {
+  const decoded = decodeSummaries(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const summaries = new Map<number, GitHubPullRequestSummary>();
+  for (const [alias, value] of Object.entries(decoded.success.data ?? {})) {
+    const index = /^s(\d+)$/.exec(alias)?.[1];
+    if (index === undefined || value?.pullRequest == null) continue;
+    const entry = decodeSummaryEntry(value.pullRequest);
+    if (!Exit.isSuccess(entry)) continue;
+    const pr = entry.value;
+    summaries.set(Number(index), {
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      headBranch: pr.headRefName,
+      baseBranch: pr.baseRefName,
+      state: toState(pr),
+      isDraft: pr.isDraft ?? false,
+      closedAt: trimmed(pr.closedAt),
+      mergedAt: trimmed(pr.mergedAt),
+      updatedAt: pr.updatedAt,
+      author: toActor(pr.author),
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changedFiles: pr.changedFiles ?? 0,
+      reviewDecision: toReviewDecisionWithReviews(
+        pr.reviewDecision,
+        (pr.latestReviews?.nodes ?? []).flatMap((review) => (review === null ? [] : [review])),
+      ),
+      // One enum for the head commit, dressed as a single check like the search row's.
+      checksState: rollupChecksState(
+        (pr.commits?.nodes ?? []).flatMap((commitNode) => {
+          const state = trimmed(commitNode?.commit?.statusCheckRollup?.state);
+          return state === null ? [] : [{ state }];
+        }),
+      ),
+      mergeability: toMergeability(pr.mergeable),
+      ...(pr.stack === undefined ? {} : { stack: toStackMembership(pr) ?? null }),
+    });
+  }
+  return Result.succeed(summaries);
+}
+
 export interface GitHubPullRequestCore extends GitHubPullRequestDetail {
   readonly viewerAccess: GitHubViewerAccess & GitHubRepositoryAccess;
   readonly comparison: GitHubBaseComparison | null;
@@ -1953,6 +2093,7 @@ export interface GitHubReviewThreadComments {
   /** The host's own count of the conversation, which a bounded read can fall short of. */
   readonly commentCount: number;
   readonly truncated: boolean;
+  readonly reviewThreadsTruncated: boolean;
   /** The pull request's own reactions, which sit on its description. */
   readonly reactions: ReadonlyArray<PullRequestReaction>;
   /** Reactions by node id, for the comments and reviews the `gh` JSON read carries no reaction on. */
