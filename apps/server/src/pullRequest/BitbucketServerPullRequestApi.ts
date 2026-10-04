@@ -565,11 +565,10 @@ export const make = Effect.gen(function* () {
             new BitbucketServerViewerUnavailableError({ reason: "unauthenticated", detail }),
           );
         }
-        return Option.match(auth.status === "authenticated" ? auth.account : Option.none(), {
-          onNone: () =>
-            Effect.fail(new BitbucketServerViewerUnavailableError({ reason: "unknown", detail })),
-          onSome: Effect.succeed,
-        });
+        return Effect.fromOption(
+          auth.status === "authenticated" ? auth.account : Option.none(),
+          () => new BitbucketServerViewerUnavailableError({ reason: "unknown", detail }),
+        );
       }),
     );
 
@@ -637,24 +636,24 @@ export const make = Effect.gen(function* () {
       decode: decodeUserSlugJson,
     }).pipe(
       Effect.catchIf(isNotAUser, () => Effect.succeed(null)),
-      Effect.flatMap((slug) =>
-        slug !== null
-          ? Effect.succeed(slug)
-          : Effect.gen(function* () {
-              const url = `${path}/pull-requests/${number}/participants?limit=${MAX_PAGE_SIZE}`;
-              let start = 0;
-              for (let page = 1; page <= CONVERSATION_PAGES; page += 1) {
-                const decoded = yield* read({
-                  operation: "listParticipants",
-                  url: withStart(url, start),
-                  decode: (body) => decodeParticipantSlugJson(body, account),
-                });
-                if (decoded.slug !== null) return decoded.slug;
-                if (decoded.nextPageStart === null) break;
-                start = decoded.nextPageStart;
-              }
-              return yield* new BitbucketServerAccountSlugError({ account });
-            }),
+      Effect.filterOrElse(
+        (slug): slug is string => slug !== null,
+        () =>
+          Effect.gen(function* () {
+            const url = `${path}/pull-requests/${number}/participants?limit=${MAX_PAGE_SIZE}`;
+            let start = 0;
+            for (let page = 1; page <= CONVERSATION_PAGES; page += 1) {
+              const decoded = yield* read({
+                operation: "listParticipants",
+                url: withStart(url, start),
+                decode: (body) => decodeParticipantSlugJson(body, account),
+              });
+              if (decoded.slug !== null) return decoded.slug;
+              if (decoded.nextPageStart === null) break;
+              start = decoded.nextPageStart;
+            }
+            return yield* new BitbucketServerAccountSlugError({ account });
+          }),
       ),
     );
 
