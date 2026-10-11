@@ -19,6 +19,7 @@ import * as AzureDevOpsPullRequestCli from "@t3tools/source-control-azure-devops
 import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
 import * as BitbucketPullRequestApi from "@t3tools/source-control-bitbucket/server/BitbucketPullRequestApi";
 import * as BitbucketServerApi from "@t3tools/source-control-bitbucket-server/server/BitbucketServerApi";
+import * as BitbucketServerPullRequestApi from "@t3tools/source-control-bitbucket-server/server/BitbucketServerPullRequestApi";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
 import * as GitHubPullRequestApi from "@t3tools/source-control-github/server/GitHubPullRequestApi";
@@ -120,6 +121,7 @@ function makeRegistry(input: {
         Layer.mock(BitbucketApi.BitbucketApi)({}),
         Layer.mock(BitbucketPullRequestApi.BitbucketPullRequestApi)({}),
         Layer.mock(BitbucketServerApi.BitbucketServerApi)({}),
+        Layer.mock(BitbucketServerPullRequestApi.BitbucketServerPullRequestApi)({}),
         ServerSettings.ServerSettingsService.layerTest(),
         Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({}),
         Layer.mock(GitHubApi.GitHubApi)({

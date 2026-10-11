@@ -1353,6 +1353,15 @@ const PROVIDER_REQUIREMENT = new Map<
         "Bitbucket rejected the configured credentials. Check them in Settings → Source Control.",
     },
   ],
+  [
+    "bitbucket-server",
+    {
+      missing:
+        "Bitbucket Data Center needs a host and token on the server. Add them in Settings → Source Control.",
+      unauthenticated:
+        "Bitbucket Data Center rejected the configured token. Check it in Settings → Source Control.",
+    },
+  ],
 ]);
 
 /**

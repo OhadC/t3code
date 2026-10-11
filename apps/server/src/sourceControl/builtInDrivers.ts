@@ -14,6 +14,7 @@ import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/Bitbucke
 import * as BitbucketPullRequestApi from "@t3tools/source-control-bitbucket/server/BitbucketPullRequestApi";
 import * as BitbucketDriver from "@t3tools/source-control-bitbucket/server/driver";
 import * as BitbucketServerApi from "@t3tools/source-control-bitbucket-server/server/BitbucketServerApi";
+import * as BitbucketServerPullRequestApi from "@t3tools/source-control-bitbucket-server/server/BitbucketServerPullRequestApi";
 import * as BitbucketServerDriver from "@t3tools/source-control-bitbucket-server/server/driver";
 import * as ForgejoCli from "@t3tools/source-control-forgejo/server/ForgejoCli";
 import * as ForgejoDriver from "@t3tools/source-control-forgejo/server/driver";
@@ -57,7 +58,7 @@ export const layer = Layer.mergeAll(
   GitHubPullRequestApi.layer.pipe(Layer.provideMerge(GitHubApi.layerWithDependencies)),
   AzureDevOpsPullRequestCli.layer.pipe(Layer.provideMerge(AzureDevOpsCli.layer)),
   BitbucketPullRequestApi.layer.pipe(Layer.provideMerge(BitbucketApi.layer)),
-  BitbucketServerApi.layer,
+  BitbucketServerPullRequestApi.layer.pipe(Layer.provideMerge(BitbucketServerApi.layer)),
   ForgejoCli.layer,
   GitCafeApi.layer.pipe(Layer.provideMerge(GitCafeCredentials.layer)),
   GitLabPullRequestCli.layer.pipe(Layer.provideMerge(GitLabCli.layer)),

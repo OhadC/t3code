@@ -41,10 +41,10 @@ import * as BitbucketServerClient from "../client/definition.ts";
 export const CONFIGURATION_HINT =
   "Add a Bitbucket Data Center host and token in Settings → Source Control, or set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server.";
 
-const API_ROOT = "/rest/api/1.0";
+export const API_ROOT = "/rest/api/1.0";
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-const MAX_PAGE_SIZE = 100;
-const MAX_PAGES = 10;
+export const MAX_PAGE_SIZE = 100;
+export const MAX_PAGES = 10;
 
 const BitbucketServerEnvConfig = Config.all({
   baseUrl: Config.String("T3CODE_BITBUCKET_SERVER_URL").pipe(Config.option),
@@ -420,7 +420,7 @@ function resolveConnection(
 }
 
 /** `PROJECTKEY/repo-slug`, the last two segments of whatever spelling arrived. */
-function parseRepositoryName(value: string): BitbucketServerRepositoryLocator | null {
+export function parseRepositoryName(value: string): BitbucketServerRepositoryLocator | null {
   const normalized = value.trim().replace(/\.git$/u, "");
   const parts = normalized.split("/").filter((part) => part.length > 0);
   const projectKey = parts.at(-2);
@@ -449,7 +449,7 @@ function remoteHostname(remoteUrl: string): string | null {
   }
 }
 
-function toBitbucketServerState(state: "open" | "closed" | "merged" | "all"): string {
+export function toBitbucketServerState(state: "open" | "closed" | "merged" | "all"): string {
   switch (state) {
     case "open":
       return "OPEN";
