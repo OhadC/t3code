@@ -333,6 +333,56 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
+  it.effect("drops the context path and scm prefix from Bitbucket Data Center HTTPS remotes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-bitbucket-server-context-test-",
+      });
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, [
+        "remote",
+        "add",
+        "origin",
+        "https://bitbucket.example.com/bitbucket/scm/acme/web.git",
+      ]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+
+      expect(identity?.canonicalKey).toBe("bitbucket.example.com/acme/web");
+      expect(identity?.displayName).toBe("acme/web");
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
+  it.effect("drops the scm prefix from Bitbucket Data Center HTTPS remotes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-bitbucket-server-test-",
+      });
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, [
+        "remote",
+        "add",
+        "origin",
+        "https://bitbucket.example.com/scm/~jdoe/testing-repo--jane.git",
+      ]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+
+      expect(identity).not.toBeNull();
+      expect(identity?.canonicalKey).toBe("bitbucket.example.com/~jdoe/testing-repo--jane");
+      expect(identity?.displayName).toBe("~jdoe/testing-repo--jane");
+      expect(identity?.provider).toBe("bitbucket-server");
+      expect(identity?.owner).toBe("~jdoe");
+      expect(identity?.name).toBe("testing-repo--jane");
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
   it.effect(
     "keeps null identities cached across repeated resolves until the negative TTL expires",
     () =>

@@ -87,6 +87,33 @@ export T3CODE_BITBUCKET_EMAIL="you@example.com"
 export T3CODE_BITBUCKET_API_TOKEN="your-token"
 ```
 
+### Bitbucket Data Center
+
+Self-hosted Bitbucket (Data Center or Server) is configured separately from Bitbucket Cloud, and
+both can be set up at once. Create an HTTP access token with repository read and write and project
+read permissions, then open **Settings → Source Control**, expand **Bitbucket Data Center**, and
+enter the host URL and token. A field saves when you leave it, and applies right away. Include the
+context path if your host serves Bitbucket under one, such as `https://example.com/bitbucket`. The
+saved token can't be viewed again; enter a new one to replace it, or choose **Remove**.
+
+If no host and token are saved, T3 Code falls back to these variables in the server's environment.
+Restart the server after changing them:
+
+```bash
+export T3CODE_BITBUCKET_SERVER_URL="https://bitbucket.example.com"
+export T3CODE_BITBUCKET_SERVER_TOKEN="your-http-access-token"
+```
+
+Repositories are addressed as `PROJECTKEY/repo-slug`; personal repositories use `~username` as the
+project key.
+
+If the host uses a certificate from your organization's own certificate authority, the desktop app
+trusts the operating system certificate store automatically. For `npx t3`, start the server with
+`NODE_USE_SYSTEM_CA=1` so Node trusts it too.
+
+Publishing a repository is not available for Bitbucket Data Center; create the repository on the
+host and clone it instead.
+
 ### Azure DevOps
 
 Install [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), add the DevOps extension, and sign in:

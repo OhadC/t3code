@@ -9,6 +9,7 @@
  */
 import * as AzureDevOps from "@t3tools/source-control-azure-devops/client/definition";
 import * as Bitbucket from "@t3tools/source-control-bitbucket/client/definition";
+import * as BitbucketServer from "@t3tools/source-control-bitbucket-server/client/definition";
 import {
   secretSourceControlHostSettingsFields,
   type SourceControlClientDefinition,
@@ -23,6 +24,7 @@ const definitions: ReadonlyArray<SourceControlClientDefinition> = [
   GitLab.definition,
   AzureDevOps.definition,
   Bitbucket.definition,
+  BitbucketServer.definition,
   Forgejo.definition,
   GitCafe.definition,
 ];

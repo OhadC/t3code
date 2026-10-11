@@ -51,40 +51,50 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
   // GitCafe, only on its own two hosts: /{owner}/{repo}/pulls/{n}
   if (host === "git.cafe" || host === "staging.git.cafe") {
     const match = /^\/([^/]+\/[^/]+)\/pulls\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
+    return claim(host, match?.[1], match?.[2]);
   }
   // GitHub, and any Enterprise install: /{owner}/{repo}/pull/{n}
   if (isHostOf(host, "github.com", "github")) {
     const match = /^\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    if (match) return claim(host, match);
+    if (match) return claim(host, match[1], match[2]);
   }
   // Forgejo and Gitea use /pulls/ on arbitrary self-hosted domains.
   const forgejo = /^\/([^/]+(?:\/[^/]+)+)\/pulls\/(\d+)(?:\/|$)/u.exec(url.pathname);
   if (forgejo) {
-    const link = claim(host, forgejo);
+    const link = claim(host, forgejo[1], forgejo[2]);
     return link === null ? null : { ...link, authority: url.host.toLowerCase() };
   }
   // GitLab, self-hosted included: /{group}/[{subgroup}/...]{repo}/-/merge_requests/{n}. The `/-/`
   // separator is GitLab's own, so the hostname is not asked about.
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
-  if (gitlab) return claim(host, gitlab);
+  if (gitlab) return claim(host, gitlab[1], gitlab[2]);
   // Bitbucket Cloud: /{workspace}/{repo}/pull-requests/{n}
-  if (isHostOf(host, "bitbucket.org", "bitbucket")) {
+  if (host === "bitbucket.org") {
     const match = /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
+    return claim(host, match?.[1], match?.[2]);
+  }
+  if (isHostOf(host, "bitbucket.org", "bitbucket")) {
+    const match = BITBUCKET_SERVER_PULL_REQUEST_PATH.exec(url.pathname);
+    return claim(host, match && `${match[2]}/${match[3]}`, match?.[4]);
   }
   // Azure DevOps, both the current host and the per-organisation one it replaced. `_git` is part
   // of the repository path there, as it is in the remote URL the identity is read from.
   if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
     const match = /^\/((?:[^/]+\/)*_git\/[^/]+)\/pullrequest\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
+    return claim(host, match?.[1], match?.[2]);
   }
   return null;
 }
 
-function claim(host: string, match: RegExpExecArray | null): ChangeRequestLink | null {
-  const repository = match?.[1];
-  const number = Number(match?.[2]);
+export const BITBUCKET_SERVER_PULL_REQUEST_PATH =
+  /^((?:\/[^/]+)*?)\/projects\/([^/]+)\/repos\/([^/]+)\/pull-requests\/(\d+)(?:\/|$)/u;
+
+function claim(
+  host: string,
+  repository: string | null | undefined,
+  numberText: string | undefined,
+): ChangeRequestLink | null {
+  const number = Number(numberText);
   return repository && Number.isSafeInteger(number) && number > 0
     ? { host, repository: repository.toLowerCase(), number }
     : null;
@@ -103,30 +113,47 @@ export function changeRequestUrlFor(
       return `https://${host}/${repository}/pull/${number}`;
     case "gitcafe":
       return `https://${host}/${repository}/pulls/${number}`;
-    case "forgejo": {
-      try {
-        const remote = new URL(remoteUrl ?? "");
-        if (
-          (remote.protocol === "http:" || remote.protocol === "https:") &&
-          (remote.hostname.toLowerCase() === host.toLowerCase() ||
-            remote.host.toLowerCase() === host.toLowerCase())
-        ) {
-          return `${remote.origin}/${repository}/pulls/${number}`;
-        }
-      } catch {
-        // SSH remotes do not specify the server's web origin.
-      }
-      return `https://${host}/${repository}/pulls/${number}`;
-    }
+    case "forgejo":
+      return `${selfHostedOrigin(host, remoteUrl)}/${repository}/pulls/${number}`;
     case "gitlab":
       return `https://${host}/${repository}/-/merge_requests/${number}`;
     case "bitbucket":
       return `https://${host}/${repository}/pull-requests/${number}`;
+    case "bitbucket-server": {
+      const [projectKey, slug, ...rest] = repository.split("/");
+      if (!projectKey || !slug || rest.length > 0) return null;
+      const remote = selfHostedRemote(host, remoteUrl);
+      const root =
+        remote === null
+          ? `https://${host}`
+          : `${remote.origin}${/^(.*?)\/scm\//u.exec(remote.pathname)?.[1] ?? ""}`;
+      return `${root}/projects/${projectKey}/repos/${slug}/pull-requests/${number}`;
+    }
     case "azure-devops":
       return `https://${canonicalRepositoryKey(`${host}/${repository}`.toLowerCase())}/pullrequest/${number}`;
     default:
       return null;
   }
+}
+
+function selfHostedOrigin(host: string, remoteUrl: string | undefined): string {
+  return selfHostedRemote(host, remoteUrl)?.origin ?? `https://${host}`;
+}
+
+function selfHostedRemote(host: string, remoteUrl: string | undefined): URL | null {
+  try {
+    const remote = new URL(remoteUrl ?? "");
+    if (
+      (remote.protocol === "http:" || remote.protocol === "https:") &&
+      (remote.hostname.toLowerCase() === host.toLowerCase() ||
+        remote.host.toLowerCase() === host.toLowerCase())
+    ) {
+      return remote;
+    }
+  } catch {
+    // SSH remotes do not specify the server's web origin.
+  }
+  return null;
 }
 
 /** Builds a GitHub URL that remains available when the pull request API cannot be read. */
@@ -231,12 +258,17 @@ export function siblingPullRequestUrl(url: string, number: number): string | nul
   const reference = parseChangeRequestUrl(url);
   if (reference === null || !Number.isSafeInteger(number) || number < 1) return null;
   const sibling = new URL(url);
+  sibling.search = "";
+  sibling.hash = "";
+  const server = BITBUCKET_SERVER_PULL_REQUEST_PATH.exec(sibling.pathname);
+  if (server !== null) {
+    sibling.pathname = `${server[1]}/projects/${server[2]}/repos/${server[3]}/pull-requests/${number}`;
+    return sibling.toString();
+  }
   const route = /^\/(-\/merge_requests|pulls?|pull-requests|pullrequest)\/\d+(?:\/|$)/u.exec(
     sibling.pathname.slice(reference.repository.length + 1),
   )?.[1];
   if (route === undefined) return null;
   sibling.pathname = `/${reference.repository}/${route}/${number}`;
-  sibling.search = "";
-  sibling.hash = "";
   return sibling.toString();
 }

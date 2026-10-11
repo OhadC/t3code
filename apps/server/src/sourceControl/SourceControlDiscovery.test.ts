@@ -21,6 +21,7 @@ import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/Azu
 import * as AzureDevOpsPullRequestCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsPullRequestCli";
 import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
 import * as BitbucketPullRequestApi from "@t3tools/source-control-bitbucket/server/BitbucketPullRequestApi";
+import * as BitbucketServerApi from "@t3tools/source-control-bitbucket-server/server/BitbucketServerApi";
 import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
 import * as GitHubPullRequestApi from "@t3tools/source-control-github/server/GitHubPullRequestApi";
 import * as GitLabCli from "@t3tools/source-control-gitlab/server/GitLabCli";
@@ -49,6 +50,14 @@ const layerSourceControlProviderRegistryTest = (input: {
         Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({}),
         Layer.mock(BitbucketApi.BitbucketApi)(input.bitbucket),
         Layer.mock(BitbucketPullRequestApi.BitbucketPullRequestApi)({}),
+        Layer.mock(BitbucketServerApi.BitbucketServerApi)({
+          probeAuth: Effect.succeed({
+            status: "unauthenticated",
+            account: Option.none(),
+            host: Option.none(),
+            detail: Option.some(BitbucketServerApi.CONFIGURATION_HINT),
+          }),
+        }),
         ServerSettings.ServerSettingsService.layerTest(),
         Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({}),
         Layer.mock(GitHubApi.GitHubApi)({}),
@@ -205,6 +214,12 @@ it.effect("reports implemented tools separately from locally available executabl
           account: Option.none(),
         },
         {
+          kind: SourceControlProviderKind.make("bitbucket-server"),
+          status: "available",
+          auth: "unauthenticated",
+          account: Option.none(),
+        },
+        {
           kind: SourceControlProviderKind.make("forgejo"),
           status: "missing",
           auth: "unknown",
@@ -221,6 +236,15 @@ it.effect("reports implemented tools separately from locally available executabl
     const bitbucket = result.sourceControlProviders.find((item) => item.kind === "bitbucket");
     assert.ok(bitbucket);
     assert.strictEqual(bitbucket.executable, undefined);
+    const bitbucketServer = result.sourceControlProviders.find(
+      (item) => item.kind === "bitbucket-server",
+    );
+    assert.ok(bitbucketServer);
+    assert.strictEqual(bitbucketServer.label, "Bitbucket Data Center");
+    assert.match(
+      Option.getOrElse(bitbucketServer.auth.detail, () => ""),
+      /T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN/u,
+    );
   }).pipe(Effect.provide(layerTest));
 });
 
@@ -354,6 +378,14 @@ Logged in to gitlab.com as gitlab-user
           auth: "authenticated",
           account: Option.some("bitbucket-user"),
           detail: Option.none(),
+        },
+        {
+          kind: SourceControlProviderKind.make("bitbucket-server"),
+          auth: "unauthenticated",
+          account: Option.none(),
+          detail: Option.some(
+            "Add a Bitbucket Data Center host and token in Settings → Source Control, or set T3CODE_BITBUCKET_SERVER_URL and T3CODE_BITBUCKET_SERVER_TOKEN on the server.",
+          ),
         },
         {
           kind: SourceControlProviderKind.make("forgejo"),

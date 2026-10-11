@@ -9,6 +9,7 @@
  */
 import * as AzureDevOps from "@t3tools/source-control-azure-devops/client/definition";
 import * as Bitbucket from "@t3tools/source-control-bitbucket/client/definition";
+import * as BitbucketServer from "@t3tools/source-control-bitbucket-server/client/definition";
 import {
   makeSourceControlClientRegistry,
   readSourceControlHostSettings,
@@ -29,13 +30,16 @@ import * as GitLab from "@t3tools/source-control-gitlab/client/definition";
  * GitHub comes first because a repository that has not reported its host yet reads as GitHub,
  * which is what clients have always shown there. A change request URL goes to the first host
  * whose shape it has, so GitCafe, which claims `/pulls/` only on its own hostnames, comes before
- * Forgejo, which claims it everywhere. Pickers sort by readiness and label, not by this order.
+ * Forgejo, which claims it everywhere, and Bitbucket Data Center, whose `/pull-requests/` sits
+ * under `/projects/…/repos/`, comes before Bitbucket Cloud. Pickers sort by readiness and label,
+ * not by this order.
  */
 const BUILT_IN_SOURCE_CONTROL_CLIENTS = [
   GitHub.definition,
   GitLab.definition,
   GitCafe.definition,
   Forgejo.definition,
+  BitbucketServer.definition,
   Bitbucket.definition,
   AzureDevOps.definition,
 ];

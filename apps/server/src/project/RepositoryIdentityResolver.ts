@@ -70,6 +70,13 @@ function pickPrimaryRemote(
   return remoteName && remoteUrl ? { remoteName, remoteUrl } : null;
 }
 
+function repositoryKeyOf(remoteUrl: string): string {
+  const key = normalizeGitRemoteUrl(remoteUrl);
+  return detectSourceControlProviderFromGitRemoteUrl(remoteUrl)?.kind === "bitbucket-server"
+    ? key.replace(/^([^/]+)\/(?:[^/]+\/)*?scm\//u, "$1/")
+    : key;
+}
+
 function repositoryPathOf(canonicalKey: string): string {
   return canonicalKey.split("/").slice(1).join("/");
 }
@@ -79,7 +86,7 @@ function buildRepositoryOrigin(
   canonicalKey: string,
 ): RepositoryIdentity["origin"] {
   if (!originUrl) return undefined;
-  const originKey = normalizeGitRemoteUrl(originUrl);
+  const originKey = repositoryKeyOf(originUrl);
   if (originKey === canonicalKey) return undefined;
   const displayName = repositoryPathOf(originKey);
   return { canonicalKey: originKey, ...(displayName ? { displayName } : {}) };
@@ -91,7 +98,7 @@ function buildRepositoryIdentity(input: {
   readonly originUrl: string | undefined;
   readonly rootPath: string;
 }): RepositoryIdentity {
-  const canonicalKey = normalizeGitRemoteUrl(input.remoteUrl);
+  const canonicalKey = repositoryKeyOf(input.remoteUrl);
   const sourceControlProvider = detectSourceControlProviderFromGitRemoteUrl(input.remoteUrl);
   const repositoryPath = repositoryPathOf(canonicalKey);
   const repositoryPathSegments = repositoryPath.split("/").filter((segment) => segment.length > 0);
