@@ -71,8 +71,8 @@ export interface SourceControlClientDefinition {
    * identity is known, or null when a hostname alone does not name this host.
    */
   readonly publicHost: string | null;
-  /** Subtitle beside the host in the publish picker. */
-  readonly publishDescription: string;
+  /** Subtitle beside the host in the publish picker, or null where it cannot be published to. */
+  readonly publishDescription: string | null;
   /** Where a publish lands, given the host the server is signed in to, if it reported one. */
   readonly publishHost: (signedInHost: string | null) => string;
   /**

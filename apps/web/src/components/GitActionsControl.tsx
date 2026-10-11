@@ -189,15 +189,21 @@ function requestVcsStatusRefresh(
 }
 const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
-/** Every built-in host, in the order the built-in definitions list them. */
-const PUBLISH_PROVIDER_OPTIONS = sourceControlClients.definitions.map((definition) => ({
-  value: definition.kind,
-  label: definition.pickerLabel,
-  description: definition.publishDescription,
-  pathPlaceholder: definition.repositoryPathHint,
-  definition,
-  Icon: sourceControlIcon(definition),
-}));
+/** Every built-in host that can be published to, in the order the built-in definitions list them. */
+const PUBLISH_PROVIDER_OPTIONS = sourceControlClients.definitions.flatMap((definition) =>
+  definition.publishDescription === null
+    ? []
+    : [
+        {
+          value: definition.kind,
+          label: definition.pickerLabel,
+          description: definition.publishDescription,
+          pathPlaceholder: definition.repositoryPathHint,
+          definition,
+          Icon: sourceControlIcon(definition),
+        },
+      ],
+);
 
 function publishProviderOption(provider: SourceControlProviderKind) {
   return (

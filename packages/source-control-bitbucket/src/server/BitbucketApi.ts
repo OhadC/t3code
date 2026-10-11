@@ -23,6 +23,7 @@ import {
 import {
   BitbucketPullRequestListSchema,
   BitbucketPullRequestSchema,
+  normalizeBitbucketChangeRequestId,
   normalizeBitbucketPullRequestRecord,
   type NormalizedBitbucketPullRequestRecord,
 } from "./bitbucketPullRequests.ts";
@@ -394,14 +395,6 @@ export class BitbucketApi extends Context.Service<
 function nonEmpty(value: string | undefined): Option.Option<string> {
   const trimmed = value?.trim();
   return trimmed === undefined || trimmed.length === 0 ? Option.none() : Option.some(trimmed);
-}
-
-function normalizeChangeRequestId(reference: string): string {
-  const trimmed = reference.trim().replace(/^#/, "");
-  const urlMatch = /(?:pull-requests|pullrequests|pull-request|pull|pr)\/(\d+)(?:\D.*)?$/i.exec(
-    trimmed,
-  );
-  return urlMatch?.[1] ?? trimmed;
 }
 
 function sourceWorkspace(input: {
@@ -815,7 +808,7 @@ export const make = Effect.gen(function* () {
       "getPullRequest",
       HttpClientRequest.get(
         apiUrl(
-          `/repositories/${encodeURIComponent(repository.workspace)}/${encodeURIComponent(repository.repoSlug)}/pullrequests/${encodeURIComponent(normalizeChangeRequestId(reference))}`,
+          `/repositories/${encodeURIComponent(repository.workspace)}/${encodeURIComponent(repository.repoSlug)}/pullrequests/${encodeURIComponent(normalizeBitbucketChangeRequestId(reference))}`,
         ),
       ),
       BitbucketPullRequestSchema,

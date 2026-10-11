@@ -34,6 +34,7 @@ export const layer = Layer.effect(
         listLocalBranchNames: git.listLocalBranchNames,
         fetchRemoteBranch: git.fetchRemoteBranch,
         fetchRemoteTrackingBranch: git.fetchRemoteTrackingBranch,
+        fetchRemoteRef: git.fetchRemoteRef,
         setBranchUpstream: git.setBranchUpstream,
         switchRef: git.switchRef,
       },
